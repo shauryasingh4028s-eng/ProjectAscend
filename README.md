@@ -14,6 +14,8 @@ Help students focus, study consistently, and understand where their time actuall
 - Study Session Timer
 - Local SQLite Database
 - Activity Completion Tracking
+- Estimate Calibration (planned vs actual, with honest "not enough data"
+  safeguards instead of overconfident predictions)
 
 ## Tech Stack
 
@@ -25,7 +27,7 @@ Help students focus, study consistently, and understand where their time actuall
 
 ## Current Version
 
-v0.4
+v1.2
 
 ## Philosophy
 

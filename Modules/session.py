@@ -79,6 +79,10 @@ class SessionEngine(QObject):
             self.session_started_at.isoformat(timespec="seconds"),
             datetime.now().isoformat(timespec="seconds"),
             actual_minutes,
+            # Keep the exact elapsed execution seconds (pause time is never
+            # counted) for future precise analytics. The minute-level
+            # actual_minutes field remains the canonical UI value.
+            actual_seconds=self.elapsed_seconds,
         )
         self.session_completed.emit(self.current_activity)
 

@@ -3,6 +3,14 @@
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from Modules.calibration_service import (
+    BIAS_BAND,
+    RECOMMENDATION_MIN_OBSERVATIONS,
+    CalibrationReport,
+    CalibrationService,
+    format_error_percent,
+)
+
 
 @dataclass(frozen=True)
 class RangeDefinition:
@@ -100,6 +108,9 @@ class InsightsDashboardData:
     trend: FocusTrendData
     patterns: ProductivityPatterns
     consistency: ConsistencyData
+    # All-time estimate calibration. This is deliberately independent of the
+    # selected range: calibration needs every completed observation there is.
+    calibration: CalibrationReport
     insights: tuple[InsightItem, ...]
 
 
@@ -115,6 +126,7 @@ class InsightsService:
     def __init__(self, database, streak_manager):
         self.database = database
         self.streak_manager = streak_manager
+        self.calibration_service = CalibrationService(database)
 
     def build_dashboard(self, range_key="7_days", today=None):
         """Return all analytics needed to render one selected Insights range."""
@@ -191,11 +203,14 @@ class InsightsService:
             current_streak,
             best_streak,
         )
+        calibration = self.calibration_service.build_report(today)
+
         insights = self.generate_insights(
             overview,
             trend,
             patterns,
             consistency,
+            calibration,
         )
 
         return InsightsDashboardData(
@@ -204,6 +219,7 @@ class InsightsService:
             trend=trend,
             patterns=patterns,
             consistency=consistency,
+            calibration=calibration,
             insights=tuple(insights),
         )
 
@@ -438,7 +454,14 @@ class InsightsService:
             daily_goal_minutes=daily_goal_minutes,
         )
 
-    def generate_insights(self, overview, trend, patterns, consistency):
+    def generate_insights(
+        self,
+        overview,
+        trend,
+        patterns,
+        consistency,
+        calibration,
+    ):
         insights = []
         comparison = trend.comparison
         has_current_work = (
@@ -482,6 +505,48 @@ class InsightsService:
                     metric=f"-{abs(comparison.percentage)}%",
                 )
             )
+
+        calibration_summary = calibration.summary
+        if (
+            calibration_summary.sample_count >= RECOMMENDATION_MIN_OBSERVATIONS
+            and calibration_summary.mean_relative_error is not None
+            and abs(calibration_summary.mean_relative_error) >= BIAS_BAND
+        ):
+            # Only a real, evidence-backed bias becomes an insight. Early
+            # signals and balanced estimates stay quiet: the Planning
+            # Accuracy section still shows the raw numbers.
+            bias_percent = format_error_percent(
+                calibration_summary.mean_relative_error
+            )
+            if calibration_summary.bias == "underestimate":
+                insights.append(
+                    InsightItem(
+                        kind="recommendation",
+                        title="Your estimates tend to run short",
+                        description=(
+                            f"Across {calibration_summary.sample_count} "
+                            "completed activities you took "
+                            f"{bias_percent} longer than planned on average. "
+                            "Adding a buffer when planning makes your day "
+                            "more realistic."
+                        ),
+                        metric=bias_percent,
+                    )
+                )
+            elif calibration_summary.bias == "overestimate":
+                insights.append(
+                    InsightItem(
+                        kind="recommendation",
+                        title="Your estimates tend to run long",
+                        description=(
+                            f"Across {calibration_summary.sample_count} "
+                            "completed activities you finished "
+                            f"{bias_percent} sooner than planned on "
+                            "average. The freed-up time can be planned for."
+                        ),
+                        metric=bias_percent,
+                    )
+                )
 
         if overview.total_tasks >= 3 and overview.completion_rate < 60:
             remaining_tasks = overview.total_tasks - overview.completed_tasks

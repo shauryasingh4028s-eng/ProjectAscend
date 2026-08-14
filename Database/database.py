@@ -4,6 +4,63 @@ from datetime import date
 import sqlite3
 import os
 
+# The schema version this build maintains. SQLite's ``user_version`` pragma
+# stores the version of an existing database file, and MIGRATIONS brings old
+# files forward in version order. Bump SCHEMA_VERSION and add a migration
+# whenever the schema changes.
+#
+# v1  - v1.1 baseline schema (activities, settings, focus_sessions,
+#       xp_events, daily_history).
+# v2  - v1.2 Calibration Foundation:
+#       * activities.original_estimate_minutes preserves the ORIGINAL
+#         planning estimate after the editable estimate is changed.
+#       * focus_sessions.actual_seconds keeps the precise elapsed execution
+#         seconds while the existing minute-level fields stay unchanged.
+SCHEMA_VERSION = 2
+
+
+def _has_column(cursor, table, column):
+    # Return True when the table already has the named column.
+    cursor.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
+def _migrate_to_v2(cursor):
+    """v1.2 Calibration Foundation.
+
+    - Preserve the original planning estimate separately from the editable
+      estimate, so calibration compares the original plan against the actual
+      result even when the user later edits the estimate.
+    - Keep precise elapsed seconds for future analytics. Existing
+      minute-level columns and their meanings are unchanged.
+
+    Existing rows cannot recover a previously edited original estimate, so
+    they are backfilled from their current estimate - the best available
+    value. This migration is idempotent and safe to re-run.
+    """
+    if not _has_column(cursor, "activities", "original_estimate_minutes"):
+        cursor.execute(
+            "ALTER TABLE activities ADD COLUMN "
+            "original_estimate_minutes INTEGER NOT NULL DEFAULT 0"
+        )
+
+    cursor.execute(
+        "UPDATE activities "
+        "SET original_estimate_minutes = estimated_minutes "
+        "WHERE original_estimate_minutes = 0 AND estimated_minutes > 0"
+    )
+
+    if not _has_column(cursor, "focus_sessions", "actual_seconds"):
+        cursor.execute(
+            "ALTER TABLE focus_sessions ADD COLUMN actual_seconds INTEGER"
+        )
+
+
+# Ordered schema migrations: target version -> migration callable.
+MIGRATIONS = {
+    2: _migrate_to_v2,
+}
+
 
 class Database:
     def __init__(self, database_path=None):
@@ -34,6 +91,7 @@ class Database:
                 activity_type TEXT NOT NULL,
                 name TEXT NOT NULL,
                 estimated_minutes INTEGER NOT NULL,
+                original_estimate_minutes INTEGER NOT NULL DEFAULT 0,
                 completed INTEGER DEFAULT 0,
                 actual_minutes INTEGER DEFAULT 0,
                 xp_awarded INTEGER NOT NULL DEFAULT 0
@@ -58,7 +116,8 @@ class Database:
                 session_date TEXT NOT NULL,
                 started_at TEXT NOT NULL,
                 completed_at TEXT NOT NULL,
-                actual_minutes INTEGER NOT NULL DEFAULT 0
+                actual_minutes INTEGER NOT NULL DEFAULT 0,
+                actual_seconds INTEGER
             )
         """)
 
@@ -106,8 +165,35 @@ class Database:
         # Insert the default daily goal if it does not already exist.
         self.create_default_settings()
 
+        # Bring older database files forward to the current schema version.
+        self.run_migrations()
+
         # Save table and default-setting changes to the SQLite database file.
         self.connection.commit()
+
+    def get_schema_version(self):
+        # Return the schema version stored in the database file.
+        self.cursor.execute("PRAGMA user_version")
+        row = self.cursor.fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def run_migrations(self):
+        # Apply pending migrations in version order and record each completed
+        # version immediately. Every migration is idempotent, so an
+        # interrupted upgrade simply finishes the remaining steps on the next
+        # start without duplicating work or data.
+        current_version = self.get_schema_version()
+
+        if current_version > SCHEMA_VERSION:
+            # The file was written by a newer build. Leave it untouched.
+            return
+
+        for target_version in sorted(MIGRATIONS):
+            if target_version <= current_version:
+                continue
+            MIGRATIONS[target_version](self.cursor)
+            current_version = target_version
+            self.cursor.execute(f"PRAGMA user_version = {target_version}")
 
     def add_missing_columns(self):
         # Read the current column names from the activities table.
@@ -168,15 +254,17 @@ class Database:
                 activity_type,
                 name,
                 estimated_minutes,
+                original_estimate_minutes,
                 completed,
                 actual_minutes
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             activity.date,
             activity.activity_type,
             activity.name,
             activity.estimated_minutes,
+            activity.original_estimate_minutes or activity.estimated_minutes,
             int(activity.completed),
             activity.actual_minutes,
         ))
@@ -196,6 +284,7 @@ class Database:
                 activity_type,
                 name,
                 estimated_minutes,
+                original_estimate_minutes,
                 completed,
                 actual_minutes
             FROM activities
@@ -213,6 +302,7 @@ class Database:
                 activity_type,
                 name,
                 estimated_minutes,
+                original_estimate_minutes,
                 completed,
                 actual_minutes
             FROM activities
@@ -241,6 +331,26 @@ class Database:
             activity.estimated_minutes,
             int(activity.completed),
             activity.actual_minutes,
+            activity.id,
+        ))
+
+        # Preserve the ORIGINAL planning estimate. Calibration must compare
+        # the plan that existed before execution against the actual result,
+        # so once an activity has recorded work (a focus session or a
+        # completion), later estimate edits no longer change the original.
+        # Before any work is recorded, an edit is still part of planning and
+        # updates the original too.
+        self.cursor.execute("""
+            UPDATE activities
+            SET original_estimate_minutes = ?
+            WHERE id = ?
+              AND completed = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM focus_sessions
+                  WHERE focus_sessions.activity_id = activities.id
+              )
+        """, (
+            activity.estimated_minutes,
             activity.id,
         ))
 
@@ -288,8 +398,9 @@ class Database:
                 activity_type=row[2],
                 name=row[3],
                 estimated_minutes=row[4],
-                completed=bool(row[5]),
-                actual_minutes=row[6],
+                original_estimate_minutes=row[5],
+                completed=bool(row[6]),
+                actual_minutes=row[7],
             )
             activities.append(activity)
 
@@ -393,25 +504,64 @@ class Database:
         started_at,
         completed_at,
         actual_minutes,
+        actual_seconds=None,
     ):
         # Persist the real session timing needed to identify focus periods.
+        # actual_seconds keeps the precise elapsed execution time (paused
+        # time is never counted) without changing the existing minute-level
+        # field used by the UI and analytics.
         self.cursor.execute("""
             INSERT INTO focus_sessions (
                 activity_id,
                 session_date,
                 started_at,
                 completed_at,
-                actual_minutes
+                actual_minutes,
+                actual_seconds
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             activity_id,
             date.today().isoformat(),
             started_at,
             completed_at,
             max(0, int(actual_minutes)),
+            None if actual_seconds is None else max(0, int(actual_seconds)),
         ))
         self.connection.commit()
+
+    def get_calibration_records(self):
+        # Return the persisted records the CalibrationService needs, with
+        # the same defensive value cleaning used by get_insights_records.
+        # original_estimate_minutes is the estimate that existed when the
+        # activity was planned; it is never affected by later edits once
+        # work has been recorded.
+        self.cursor.execute("""
+            SELECT
+                id,
+                activity_type,
+                name,
+                original_estimate_minutes,
+                estimated_minutes,
+                completed,
+                actual_minutes
+            FROM activities
+            ORDER BY date, id
+        """)
+        rows = self.cursor.fetchall()
+
+        return [
+            {
+                "activity_id": row[0],
+                "activity_type": row[1] or "Uncategorised",
+                "name": row[2] or "",
+                "original_estimate_minutes": max(0, row[3] or 0),
+                "estimated_minutes": max(0, row[4] or 0),
+                "completed": bool(row[5]),
+                "actual_minutes": max(0, row[6] or 0),
+            }
+            for row in rows
+        ]
 
     def get_insights_records(self, start_date, end_date):
         # Collect all persisted records required by the Insights service in a

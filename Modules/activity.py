@@ -10,6 +10,10 @@ class Activity:
     estimated_minutes: int
     completed: bool = False
     actual_minutes: int = 0
+    # The estimate that existed when the activity was planned. Frozen once
+    # work is recorded so estimate calibration compares the ORIGINAL plan
+    # against the actual result, not the latest edited value.
+    original_estimate_minutes: int = 0
 
     def display_text(self):
         # Show a checkbox depending on completion status

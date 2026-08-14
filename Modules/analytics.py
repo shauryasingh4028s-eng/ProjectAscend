@@ -22,6 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from Modules.calibration_service import (
+    MIN_OBSERVATIONS_FOR_STATS,
+    evidence_label,
+    format_error_percent,
+    format_plain_percent,
+)
 from Modules.date_utils import format_display_date
 from Modules.insights_service import format_day_count, format_minutes
 from UI.theme.design_system import Colors, ThemeManager
@@ -396,6 +402,7 @@ class AnalyticsWindow(QWidget):
         self.content_layout.addWidget(self.create_overview_section())
         self.content_layout.addWidget(self.create_focus_trends_section())
         self.content_layout.addWidget(self.create_patterns_section())
+        self.content_layout.addWidget(self.create_calibration_section())
         self.content_layout.addWidget(self.create_consistency_section())
         self.content_layout.addWidget(self.create_insights_section())
         self.content_layout.addStretch()
@@ -493,6 +500,28 @@ class AnalyticsWindow(QWidget):
         self.productive_days_label.setObjectName("MutedText")
         layout.addLayout(grid)
         layout.addWidget(self.productive_days_label)
+        return section
+
+    def create_calibration_section(self):
+        section, layout = self.create_section("Planning Accuracy")
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(10)
+        self.bias_card = PatternCard("Estimate Bias")
+        self.typical_error_card = PatternCard("Typical Error")
+        self.confidence_card = PatternCard("Confidence")
+        for column, card in enumerate((
+            self.bias_card,
+            self.typical_error_card,
+            self.confidence_card,
+        )):
+            grid.addWidget(card, 0, column)
+            grid.setColumnStretch(column, 1)
+        self.calibration_note_label = QLabel()
+        self.calibration_note_label.setObjectName("MutedText")
+        self.calibration_note_label.setWordWrap(True)
+        layout.addLayout(grid)
+        layout.addWidget(self.calibration_note_label)
         return section
 
     def create_consistency_section(self):
@@ -693,7 +722,122 @@ class AnalyticsWindow(QWidget):
             f"{consistency.goal_success_rate}%"
         )
 
+        self.render_calibration(data.calibration)
         self.render_insights(data.insights)
+
+    def render_calibration(self, calibration):
+        """Render the all-time Planning Accuracy section.
+
+        This section never invents intelligence: without enough completed
+        observations it explicitly says so instead of showing a number.
+        """
+        summary = calibration.summary
+        sample_count = summary.sample_count
+
+        if sample_count < MIN_OBSERVATIONS_FOR_STATS:
+            self.bias_card.set_value(
+                "Not enough data yet",
+                "Complete at least 3 activities to begin calibration.",
+            )
+            self.typical_error_card.set_value(
+                "Not enough data yet",
+                "Calibration needs completed activities with focus time.",
+            )
+            self.confidence_card.set_value(
+                evidence_label(summary.evidence_level),
+                "No recommendation yet.",
+            )
+            self.calibration_note_label.setText(
+                "Estimate calibration compares the ORIGINAL plan of a "
+                "completed activity against its actual duration. Incomplete "
+                "work is never counted."
+            )
+            return
+
+        self.bias_card.set_value(
+            format_error_percent(summary.mean_relative_error),
+            (
+                f"Average error across {sample_count} completed "
+                "activities (all-time)"
+            ),
+        )
+        self.typical_error_card.set_value(
+            format_plain_percent(summary.mean_absolute_percentage_error),
+            "Typical deviation from the estimate",
+        )
+        self.confidence_card.set_value(
+            evidence_label(summary.evidence_level),
+            (
+                f"{sample_count} observations • recommendation available"
+                if summary.suggested_multiplier is not None
+                else f"{sample_count} observations • no recommendation yet"
+            ),
+        )
+
+        note_parts = []
+        best_calibrated = self.best_calibrated_category(calibration)
+        most_variable = self.most_variable_category(calibration)
+        if best_calibrated is not None:
+            note_parts.append(
+                f"Best calibrated: {best_calibrated.activity_type} "
+                f"({format_error_percent(best_calibrated.mean_relative_error)}, "
+                f"{best_calibrated.sample_count} samples)"
+            )
+        if most_variable is not None and most_variable is not best_calibrated:
+            note_parts.append(
+                f"Most variable: {most_variable.activity_type} "
+                f"({format_plain_percent(most_variable.mean_absolute_percentage_error)}, "
+                f"{most_variable.sample_count} samples)"
+            )
+        if not note_parts:
+            note_parts.append(
+                "Category-level calibration unlocks as a category reaches "
+                f"{MIN_OBSERVATIONS_FOR_STATS} completed activities."
+            )
+
+        if summary.suggested_multiplier is not None:
+            note_parts.append(
+                "Your history suggests planning "
+                f"{format_error_percent(summary.suggested_multiplier - 1)} "
+                "more time than the estimate "
+                f"(×{summary.suggested_multiplier:.2f})."
+            )
+
+        self.calibration_note_label.setText(" • ".join(note_parts))
+
+    @staticmethod
+    def best_calibrated_category(calibration):
+        """Category with the smallest average error (closest to the plan)."""
+        best = None
+        for category in calibration.categories:
+            if category.sample_count < MIN_OBSERVATIONS_FOR_STATS:
+                continue
+            if category.mean_relative_error is None:
+                continue
+            if (
+                best is None
+                or abs(category.mean_relative_error)
+                < abs(best.mean_relative_error)
+            ):
+                best = category
+        return best
+
+    @staticmethod
+    def most_variable_category(calibration):
+        """Category with the largest typical error (least predictable)."""
+        most_variable = None
+        for category in calibration.categories:
+            if category.sample_count < MIN_OBSERVATIONS_FOR_STATS:
+                continue
+            if category.mean_absolute_percentage_error is None:
+                continue
+            if (
+                most_variable is None
+                or category.mean_absolute_percentage_error
+                > most_variable.mean_absolute_percentage_error
+            ):
+                most_variable = category
+        return most_variable
 
     def render_insights(self, insights):
         self.clear_layout(self.insights_layout)
