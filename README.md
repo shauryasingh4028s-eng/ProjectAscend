@@ -16,6 +16,10 @@ Help students focus, study consistently, and understand where their time actuall
 - Activity Completion Tracking
 - Estimate Calibration (planned vs actual, with honest "not enough data"
   safeguards instead of overconfident predictions)
+- Insights Experience: focus trends, time distribution by category,
+  day-of-week x time-of-day rhythm heatmap, consistency calendar,
+  evidence-backed "What Ascend Learned" observations and personal
+  highlights - across Today / 7 Days / 30 Days / 3 Months / All Time
 
 ## Tech Stack
 
@@ -27,7 +31,7 @@ Help students focus, study consistently, and understand where their time actuall
 
 ## Current Version
 
-v1.2
+v1.3
 
 ## Philosophy
 

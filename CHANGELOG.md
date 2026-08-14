@@ -2,6 +2,46 @@
 
 ---
 
+# v1.3 - Insights Experience
+Status: ✅ Completed
+
+### Added
+- Insights hero header with a clear narrative: "Understand your
+  productivity. Improve it."
+- Period selector extended to Today / 7 Days / 30 Days / 3 Months /
+  All Time, with honest comparisons against the previous equivalent
+  period (never invented when no previous data exists).
+- Productivity Overview with comparison deltas (+18% focus, +7 pts
+  completion, +4 activities), each hidden when no previous data exists.
+- Focus Trend improvements: denser grid, value captions, strongest
+  period highlighted, granularity-aware labels, richer tooltips.
+- "Where Your Time Goes": ranked horizontal-bar chart of focus time by
+  activity category with hover tooltips; extra categories merge into an
+  honest "Other" bar.
+- "When You Work Best": day-of-week x time-of-day focus heatmap built
+  from timestamped sessions, with a strongest-window interpretation
+  that only appears with enough evidence ("We're still learning your
+  rhythm." otherwise).
+- "What Ascend Learned": evidence-backed observations (focus window,
+  estimate bias per category, best day, growing consistency, sharper
+  estimates), each following OBSERVATION + EVIDENCE + CONFIDENCE with
+  documented thresholds. No LLM, no invented patterns.
+- Personal Highlights: best day, longest focus session, biggest
+  improvement - all calculated from real data.
+- Long-range trend aggregation (weekly/monthly buckets) so 3 Months and
+  All Time stay readable.
+- Light theme improvements: washed soft tints for chips, selected
+  states and heatmaps on white surfaces.
+
+### Design decisions
+- Every new number is derived from persisted data; empty and
+  insufficient-data states are deliberate and explicit.
+- The v1.2 calibration engine, formulas, thresholds, schema and
+  migrations are untouched.
+- No new dependencies; charts remain custom-painted PySide6 widgets.
+
+---
+
 # v1.2 - Calibration Foundation
 Status: ✅ Completed
 
