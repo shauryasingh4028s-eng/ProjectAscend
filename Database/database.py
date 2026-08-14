@@ -530,6 +530,53 @@ class Database:
         ))
         self.connection.commit()
 
+    def get_earliest_record_date(self):
+        """Return the earliest date with any persisted activity, session or
+        XP event, or ``None`` when the database is empty. Used to define the
+        "All Time" insights range from real data."""
+        self.cursor.execute("""
+            SELECT MIN(earliest_date) FROM (
+                SELECT MIN(date) AS earliest_date FROM activities
+                UNION ALL
+                SELECT MIN(session_date) FROM focus_sessions
+                UNION ALL
+                SELECT MIN(earned_date) FROM xp_events
+            )
+        """)
+        row = self.cursor.fetchone()
+        return row[0] if row is not None else None
+
+    def get_planning_trend_records(self):
+        """Return dated plan-vs-actual records for planning-accuracy trend
+        analysis. Read-only; the CalibrationService keeps its own query and
+        remains the owner of calibration statistics."""
+        self.cursor.execute("""
+            SELECT
+                id,
+                date,
+                activity_type,
+                original_estimate_minutes,
+                estimated_minutes,
+                completed,
+                actual_minutes
+            FROM activities
+            ORDER BY date, id
+        """)
+        rows = self.cursor.fetchall()
+
+        return [
+            {
+                "activity_id": row[0],
+                "date": row[1],
+                "activity_type": row[2] or "Uncategorised",
+                "original_estimate_minutes": max(0, row[3] or 0),
+                "estimated_minutes": max(0, row[4] or 0),
+                "completed": bool(row[5]),
+                "actual_minutes": max(0, row[6] or 0),
+            }
+            for row in rows
+        ]
+
     def get_calibration_records(self):
         # Return the persisted records the CalibrationService needs, with
         # the same defensive value cleaning used by get_insights_records.
