@@ -38,7 +38,7 @@ from Modules.insights_service import (
     format_day_count,
     format_minutes,
 )
-from UI.theme.design_system import Colors, Radius, ThemeManager
+from UI.theme.design_system import Colors, IconFactory, Radius, ThemeManager
 
 
 class MetricCard(QFrame):
@@ -323,7 +323,7 @@ class FocusTrendChart(QWidget):
                     top_color = QColor(
                         Colors.ACCENT
                         if not is_hovered
-                        else "#9B7BFF"
+                        else Colors.ACCENT_HOVER
                     )
                     bottom_color = QColor(Colors.PRIMARY)
                 else:
@@ -806,7 +806,7 @@ class LearnedInsightCard(QFrame):
         "moderate_confidence": (
             Colors.ACCENT_SOFT,
             Colors.ACCENT_MUTED,
-            "#B7A4FF",
+            Colors.ACCENT_HOVER,
         ),
         "early_signal": (
             Colors.WARNING_SOFT,
@@ -877,6 +877,10 @@ class AnalyticsWindow(QWidget):
         self.selected_range = "7_days"
         self.dashboard_data = None
         self.range_buttons = {}
+        self.icon_factory = IconFactory(self)
+        # Section title -> (icon label, qtawesome name). Icons are re-applied
+        # on every refresh so they follow the active theme's colours.
+        self.section_icon_labels = {}
 
         self.setWindowTitle("Project Ascend - Insights")
         self.apply_styles()
@@ -976,7 +980,7 @@ class AnalyticsWindow(QWidget):
         return layout
 
     def create_overview_section(self):
-        section, layout = self.create_section("Productivity Overview")
+        section, layout = self.create_section("Productivity Overview", "fa5s.tachometer-alt")
         self.overview_grid = QGridLayout()
         self.overview_grid.setContentsMargins(0, 0, 0, 0)
         self.overview_grid.setSpacing(10)
@@ -1001,7 +1005,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_focus_trends_section(self):
-        section, layout = self.create_section("Focus Trends")
+        section, layout = self.create_section("Focus Trends", "fa5s.bullseye")
 
         header = QHBoxLayout()
         self.trend_summary_label = QLabel()
@@ -1017,7 +1021,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_distribution_section(self):
-        section, layout = self.create_section("Where Your Time Goes")
+        section, layout = self.create_section("Where Your Time Goes", "fa5s.layer-group")
         self.distribution_chart = ActivityDistributionChart()
         self.distribution_total_label = QLabel()
         self.distribution_total_label.setObjectName("MutedText")
@@ -1026,7 +1030,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_day_hour_section(self):
-        section, layout = self.create_section("When You Work Best")
+        section, layout = self.create_section("When You Work Best", "fa5s.clock")
         self.day_hour_heatmap = DayHourHeatmap()
         self.rhythm_label = QLabel()
         self.rhythm_label.setObjectName("SectionTitle")
@@ -1038,7 +1042,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_calibration_section(self):
-        section, layout = self.create_section("Planning Accuracy")
+        section, layout = self.create_section("Planning Accuracy", "fa5s.crosshairs")
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(10)
@@ -1060,7 +1064,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_consistency_section(self):
-        section, layout = self.create_section("Consistency")
+        section, layout = self.create_section("Consistency", "fa5s.calendar-check")
         self.heatmap = ConsistencyHeatmap()
         self.heatmap.setMinimumHeight(56)
         layout.addWidget(self.heatmap)
@@ -1103,7 +1107,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_learned_section(self):
-        section, layout = self.create_section("What Ascend Learned")
+        section, layout = self.create_section("What Ascend Learned", "fa5s.brain")
         self.learned_layout = QVBoxLayout()
         self.learned_layout.setContentsMargins(0, 0, 0, 0)
         self.learned_layout.setSpacing(8)
@@ -1111,7 +1115,7 @@ class AnalyticsWindow(QWidget):
         return section
 
     def create_highlights_section(self):
-        section, layout = self.create_section("Personal Highlights")
+        section, layout = self.create_section("Personal Highlights", "fa5s.trophy")
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(10)
@@ -1134,16 +1138,37 @@ class AnalyticsWindow(QWidget):
         layout.addLayout(self.insights_layout)
         return section
 
-    def create_section(self, title):
+    def create_section(self, title, icon_name=None):
+        """Build a titled Insights surface.
+
+        ``icon_name`` optionally adds a small QtAwesome glyph beside the
+        title. Icons stay subordinate to the information: muted by default,
+        accent-tinted only for the intelligence section, and re-coloured on
+        refresh so they follow the active theme.
+        """
         section = QFrame()
         section.setObjectName("InsightSurface")
         section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         layout = QVBoxLayout(section)
         layout.setContentsMargins(16, 13, 16, 15)
         layout.setSpacing(10)
+
         title_label = QLabel(title)
         title_label.setObjectName("SectionTitle")
-        layout.addWidget(title_label)
+
+        if icon_name:
+            header = QHBoxLayout()
+            header.setSpacing(8)
+            icon_label = QLabel()
+            icon_label.setFixedSize(18, 18)
+            icon_label.setAlignment(Qt.AlignVCenter)
+            self.section_icon_labels[title] = (icon_label, icon_name)
+            header.addWidget(icon_label)
+            header.addWidget(title_label)
+            header.addStretch()
+            layout.addLayout(header)
+        else:
+            layout.addWidget(title_label)
         return section, layout
 
     def create_consistency_stat(self, title):
@@ -1179,7 +1204,24 @@ class AnalyticsWindow(QWidget):
         self.dashboard_data = self.insights_service.build_dashboard(
             self.selected_range
         )
+        self.refresh_section_icons()
         self.render_dashboard(self.dashboard_data)
+
+    def refresh_section_icons(self):
+        """Re-colour the section glyphs with the active theme's palette.
+
+        Icons are muted supporting marks; the intelligence section
+        ("What Ascend Learned") keeps a restrained purple accent so its
+        identity survives the theme switch.
+        """
+        for title, (label, icon_name) in self.section_icon_labels.items():
+            color = (
+                Colors.ACCENT
+                if title == "What Ascend Learned"
+                else Colors.TEXT_MUTED
+            )
+            icon = self.icon_factory.get(icon_name, color)
+            label.setPixmap(icon.pixmap(16, 16))
 
     def render_dashboard(self, data):
         self.range_caption_label.setText(
@@ -1625,10 +1667,10 @@ class AnalyticsWindow(QWidget):
 
         icon, color = {
             "positive": ("↑", Colors.SUCCESS),
-            "warning": ("!", "#F87171"),
+            "warning": ("!", Colors.ERROR),
             "goal": ("•", Colors.PRIMARY),
             "pattern": ("◈", Colors.ACCENT),
-            "streak": ("↑", "#F59E0B"),
+            "streak": ("↑", Colors.WARNING),
             "recommendation": ("→", Colors.PRIMARY_HOVER),
             "info": ("i", Colors.TEXT_MUTED),
         }.get(insight.kind, ("i", Colors.TEXT_MUTED))

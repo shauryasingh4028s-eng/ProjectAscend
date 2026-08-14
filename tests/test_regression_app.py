@@ -353,6 +353,55 @@ class TestInsightsV13:
         assert window.selected_range == "90_days"
         assert window.dashboard_data.range_definition.label == "3 Months"
 
+    def test_insights_section_icons_render(self, app_controller):
+        """Every major Insights section carries a QtAwesome glyph that
+        resolves to a real pixmap (no broken or emoji icons)."""
+        controller = app_controller
+        controller.show_analytics()
+        window = controller.analytics_window
+
+        assert len(window.section_icon_labels) == 8
+        expected = {
+            "Productivity Overview": "fa5s.tachometer-alt",
+            "Focus Trends": "fa5s.bullseye",
+            "Where Your Time Goes": "fa5s.layer-group",
+            "When You Work Best": "fa5s.clock",
+            "Planning Accuracy": "fa5s.crosshairs",
+            "Consistency": "fa5s.calendar-check",
+            "What Ascend Learned": "fa5s.brain",
+            "Personal Highlights": "fa5s.trophy",
+        }
+        for title, icon_name in expected.items():
+            label, registered_name = window.section_icon_labels[title]
+            assert registered_name == icon_name
+            assert label.pixmap() is not None and not label.pixmap().isNull()
+
+    def test_light_theme_palette_is_ambient_and_distinct(self, app_controller):
+        """The light theme is an intentional 'Clear Thinking' palette:
+        soft-neutral canvas, white surfaces, washed tints - not an inverted
+        dark theme. The dark identity stays untouched."""
+        from UI.theme.design_system import Colors, ThemeManager
+
+        controller = app_controller
+        controller.show_analytics()
+
+        ThemeManager.set_theme("light")
+        try:
+            assert Colors.BACKGROUND == "#F5F7FB"
+            assert Colors.SURFACE == "#FFFFFF"
+            assert Colors.SURFACE_SECONDARY == "#F8F9FD"
+            assert Colors.PRIMARY_SOFT == "#E8EEFF"
+            assert Colors.ACCENT_SOFT == "#EEEAFE"
+            assert Colors.TEXT_PRIMARY == "#172033"
+            # Brand colours are deeper in light so text stays accessible.
+            assert Colors.PRIMARY == "#3B6FF5"
+            assert Colors.WARNING == "#AC7113"
+        finally:
+            ThemeManager.set_theme("dark")
+
+        assert Colors.BACKGROUND == "#05070C"
+        assert Colors.SURFACE == "#0D1219"
+
     def test_light_theme_renders_insights(self, app_controller):
         from UI.theme.design_system import ThemeManager
 

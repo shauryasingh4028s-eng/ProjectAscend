@@ -18,7 +18,12 @@ except ImportError:
 
 
 class Colors:
-    """Semantic colour tokens for the whole application."""
+    """Semantic colour tokens for the whole application.
+
+    Every token is theme-aware: ``ThemeManager.set_theme()`` rewrites the
+    values below from the active theme palette. Structural values default
+    to the dark ("Deep Focus") theme until a theme is selected.
+    """
 
     # Structural surfaces.
     BACKGROUND = "#05070C"
@@ -157,6 +162,10 @@ class ThemeManager:
     """Provides shadows, theme tokens and the application-wide stylesheet."""
 
     _themes = {
+        # Dark: "Deep Focus" - the established premium identity. Brand and
+        # status values are the original Ascend constants; nothing changes
+        # visually except that they are now theme-managed like every other
+        # token (shared components stay consistent).
         "dark": {
             "BACKGROUND": "#05070C", "SIDEBAR": "#070A11", "HEADER": "#080C13",
             "SURFACE": "#0D1219", "SURFACE_SECONDARY": "#101722", "SURFACE_ELEVATED": "#131B27",
@@ -166,18 +175,30 @@ class ThemeManager:
             "PRIMARY_SOFT": "#152C5E", "PRIMARY_MUTED": "#1D3A78",
             "ACCENT_SOFT": "#241C4D", "ACCENT_MUTED": "#2E2560",
             "SUCCESS_SOFT": "#0C2E1E", "WARNING_SOFT": "#3A2A08",
+            "PRIMARY": "#3B82F6", "PRIMARY_HOVER": "#60A5FA", "PRIMARY_PRESSED": "#2563EB",
+            "ACCENT": "#7C5CFF", "ACCENT_HOVER": "#9B7BFF",
+            "SUCCESS": "#22C55E", "SUCCESS_HOVER": "#4ADE80",
+            "WARNING": "#F59E0B", "ERROR": "#EF4444",
         },
+        # Light: "Clear Thinking" - an ambient, soft-neutral canvas. Warm
+        # white surfaces, cool blue accents, washed semantic tints. Strong
+        # colours are reserved for values and actions; colour never shouts.
         "light": {
-            "BACKGROUND": "#F3F6FA", "SIDEBAR": "#EAF0F7", "HEADER": "#F8FAFD",
-            "SURFACE": "#FFFFFF", "SURFACE_SECONDARY": "#F4F7FB", "SURFACE_ELEVATED": "#FFFFFF",
-            "SURFACE_HOVER": "#EAF1F9", "BORDER": "#D8E0EA", "BORDER_STRONG": "#B9C7D8",
-            "TEXT_PRIMARY": "#172033", "TEXT_SECONDARY": "#43516A", "TEXT_MUTED": "#6D7B91",
-            "DISABLED": "#A2ADBD",
-            # Soft tints are light-washed so chips and selected states read
-            # correctly on white surfaces instead of inheriting dark-navy.
-            "PRIMARY_SOFT": "#E3EDFD", "PRIMARY_MUTED": "#B9D2F7",
-            "ACCENT_SOFT": "#EDE7FB", "ACCENT_MUTED": "#CFC2F4",
-            "SUCCESS_SOFT": "#DCF3E5", "WARNING_SOFT": "#FCEFD6",
+            "BACKGROUND": "#F5F7FB", "SIDEBAR": "#EDF1F8", "HEADER": "#F8FAFD",
+            "SURFACE": "#FFFFFF", "SURFACE_SECONDARY": "#F8F9FD", "SURFACE_ELEVATED": "#F1F4FC",
+            "SURFACE_HOVER": "#EDF2FA", "BORDER": "#E3E8F0", "BORDER_STRONG": "#CBD5E4",
+            "TEXT_PRIMARY": "#172033", "TEXT_SECONDARY": "#596579", "TEXT_MUTED": "#75819B",
+            "DISABLED": "#B0BACB",
+            # Washed tints: selected states, chips and heatmap cells read
+            # correctly on white instead of inheriting dark-navy.
+            "PRIMARY_SOFT": "#E8EEFF", "PRIMARY_MUTED": "#C7D8FB",
+            "ACCENT_SOFT": "#EEEAFE", "ACCENT_MUTED": "#D8CFF7",
+            "SUCCESS_SOFT": "#E5F6ED", "WARNING_SOFT": "#FFF3DD",
+            # Deeper brand/status values so text on white stays accessible.
+            "PRIMARY": "#3B6FF5", "PRIMARY_HOVER": "#4A78EE", "PRIMARY_PRESSED": "#2E5BD8",
+            "ACCENT": "#7657E8", "ACCENT_HOVER": "#8B6FE8",
+            "SUCCESS": "#26915F", "SUCCESS_HOVER": "#1F7A4D",
+            "WARNING": "#AC7113", "ERROR": "#C94A4A",
         },
     }
     current_theme = "dark"
@@ -290,12 +311,20 @@ class ThemeManager:
             QFrame#HeroCard,
             QFrame#MetricCard,
             QFrame#PlayerCard,
-            QFrame#FocusCard,
             QFrame#ActivitySection,
             QFrame#ActionBar,
             QFrame#InsightSurface {{
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.LG}px;
+            }}
+
+            /* The Focus card is the dashboard's primary surface: a soft
+               brand border gives it the visual weight of "what matters
+               right now" without competing with the primary action. */
+            QFrame#FocusCard {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.PRIMARY_MUTED};
                 border-radius: {Radius.LG}px;
             }}
 
@@ -705,7 +734,7 @@ class ThemeManager:
 
             QLabel#HistoryBadgeMissed {{
                 color: {Colors.WARNING};
-                background-color: #2A1D05;
+                background-color: {Colors.WARNING_SOFT};
                 border: 1px solid {Colors.WARNING};
                 border-radius: {Radius.SM}px;
                 padding: 3px 10px;
