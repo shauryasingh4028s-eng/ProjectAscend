@@ -135,3 +135,131 @@ class TestApplicationRegression:
             controller.show_dashboard()
         finally:
             controller.close_database()
+
+
+class TestCalibrationPresentation:
+    """Presentation-only checks for the Planning Accuracy section.
+
+    These assert the UI hierarchy (time-first when a recommendation
+    exists) without touching any calibration calculation: the displayed
+    realistic estimate must equal recommended_estimate() output.
+    """
+
+    def complete_seeded_activities(self, database, activity_date):
+        for activity in database.get_activities_for_date(activity_date):
+            activity.completed = True
+            database.update_activity(activity)
+
+    def test_recommendation_state_leads_with_realistic_time(
+        self, app_controller
+    ):
+        controller = app_controller
+        database = controller.database
+        today = date.today().isoformat()
+
+        from Modules.activity import Activity
+
+        # 12 completed activities, all planned for 60 min and taking 68.
+        for index in range(12):
+            database.add_activity(
+                Activity(
+                    id=None,
+                    date=today,
+                    activity_type="Coding",
+                    name=f"Calibration task {index}",
+                    estimated_minutes=60,
+                )
+            )
+        for activity in database.get_activities_for_date(today):
+            activity.completed = True
+            activity.actual_minutes = 68
+            database.update_activity(activity)
+
+        controller.show_analytics()
+        window = controller.analytics_window
+        data = window.dashboard_data
+        summary = data.calibration.summary
+
+        # Backend values come straight from the approved engine.
+        assert summary.sample_count == 12
+        assert summary.suggested_multiplier is not None
+        assert summary.evidence_level == "moderate_confidence"
+
+        # The displayed realistic estimate must equal the service's own
+        # recommended_estimate(median estimate, multiplier) result.
+        from Modules.calibration_service import recommended_estimate
+
+        expected = recommended_estimate(60, summary.suggested_multiplier)
+        assert window.bias_card.title_label.text() == "Realistic Estimate"
+        assert window.bias_card.value_label.text() == f"~{expected} min"
+        assert window.bias_card.detail_label.text() == "For a typical 60-min plan"
+
+        assert (
+            window.typical_error_card.title_label.text() == "Time Difference"
+        )
+        assert window.typical_error_card.value_label.text() == (
+            f"+{expected - 60} min"
+        )
+        assert (
+            window.typical_error_card.detail_label.text()
+            == "More than your original estimate"
+        )
+
+        assert window.confidence_card.value_label.text() == (
+            "Moderate confidence"
+        )
+        assert (
+            window.confidence_card.detail_label.text()
+            == "Based on 12 completed activities"
+        )
+        assert (
+            "Historical planning factor"
+            in window.calibration_note_label.text()
+        )
+
+    def test_early_signal_state_never_invents_a_recommendation(
+        self, app_controller
+    ):
+        controller = app_controller
+        database = controller.database
+        today = date.today().isoformat()
+
+        from Modules.activity import Activity
+
+        # 5 completed activities: statistics exist, but below the
+        # recommendation threshold.
+        for index in range(5):
+            database.add_activity(
+                Activity(
+                    id=None,
+                    date=today,
+                    activity_type="Study",
+                    name=f"Early task {index}",
+                    estimated_minutes=30,
+                )
+            )
+        for activity in database.get_activities_for_date(today):
+            activity.completed = True
+            activity.actual_minutes = 35
+            database.update_activity(activity)
+
+        controller.show_analytics()
+        window = controller.analytics_window
+        summary = window.dashboard_data.calibration.summary
+
+        assert summary.sample_count == 5
+        assert summary.suggested_multiplier is None
+
+        # Standard analytic titles and honest no-recommendation copy.
+        assert window.bias_card.title_label.text() == "Estimate Bias"
+        assert window.bias_card.value_label.text() == "+17%"
+        assert window.typical_error_card.title_label.text() == "Typical Error"
+        assert window.confidence_card.value_label.text() == "Early signal"
+        assert (
+            "no recommendation yet"
+            in window.confidence_card.detail_label.text()
+        )
+        assert (
+            "Realistic time suggestions unlock"
+            in window.calibration_note_label.text()
+        )

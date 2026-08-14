@@ -5,6 +5,7 @@ comparisons, patterns, and recommendations are provided by InsightsService.
 """
 
 from datetime import date
+from statistics import median
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
@@ -24,9 +25,11 @@ from PySide6.QtWidgets import (
 
 from Modules.calibration_service import (
     MIN_OBSERVATIONS_FOR_STATS,
+    RECOMMENDATION_MIN_OBSERVATIONS,
     evidence_label,
     format_error_percent,
     format_plain_percent,
+    recommended_estimate,
 )
 from Modules.date_utils import format_display_date
 from Modules.insights_service import format_day_count, format_minutes
@@ -79,6 +82,7 @@ class PatternCard(QFrame):
 
         title_label = QLabel(title)
         title_label.setObjectName("InsightMetricTitle")
+        self.title_label = title_label
         self.value_label = QLabel("Not enough data yet")
         self.value_label.setObjectName("InsightPatternValue")
         self.value_label.setWordWrap(True)
@@ -730,11 +734,15 @@ class AnalyticsWindow(QWidget):
 
         This section never invents intelligence: without enough completed
         observations it explicitly says so instead of showing a number.
+        Once a recommendation exists, the PRIMARY message is a realistic
+        duration in minutes; percentages and the historical factor stay
+        supporting copy.
         """
         summary = calibration.summary
         sample_count = summary.sample_count
 
         if sample_count < MIN_OBSERVATIONS_FOR_STATS:
+            self.set_calibration_card_titles()
             self.bias_card.set_value(
                 "Not enough data yet",
                 "Complete at least 3 activities to begin calibration.",
@@ -754,6 +762,27 @@ class AnalyticsWindow(QWidget):
             )
             return
 
+        if summary.suggested_multiplier is None:
+            self.set_calibration_card_titles()
+            self.render_early_signal_calibration(calibration)
+            return
+
+        self.render_recommendation_calibration(calibration)
+
+    def set_calibration_card_titles(self):
+        """Restore the analytic titles used before a recommendation exists."""
+        self.bias_card.title_label.setText("Estimate Bias")
+        self.typical_error_card.title_label.setText("Typical Error")
+
+    def render_early_signal_calibration(self, calibration):
+        """Percentage presentation used while evidence is still growing.
+
+        No multiplier exists yet, so no time recommendation is invented;
+        the raw statistics are shown exactly as computed by the service.
+        """
+        summary = calibration.summary
+        sample_count = summary.sample_count
+
         self.bias_card.set_value(
             format_error_percent(summary.mean_relative_error),
             (
@@ -767,13 +796,78 @@ class AnalyticsWindow(QWidget):
         )
         self.confidence_card.set_value(
             evidence_label(summary.evidence_level),
-            (
-                f"{sample_count} observations • recommendation available"
-                if summary.suggested_multiplier is not None
-                else f"{sample_count} observations • no recommendation yet"
-            ),
+            f"{sample_count} observations • no recommendation yet",
         )
 
+        note_parts = self.build_calibration_note_parts(calibration)
+        note_parts.append(
+            "Realistic time suggestions unlock at "
+            f"{RECOMMENDATION_MIN_OBSERVATIONS} completed activities."
+        )
+        self.calibration_note_label.setText(" • ".join(note_parts))
+
+    def render_recommendation_calibration(self, calibration):
+        """Time-first presentation once a recommendation is available.
+
+        WHAT SHOULD I DO?  -> "Plan ~68 min" (realistic duration)
+        WHY?               -> "About 8 min more than your estimate"
+        HOW RELIABLE?      -> "Based on 45 completed activities"
+
+        The realistic duration comes from the user's own typical plan and
+        the calibrated multiplier, rounded by the existing
+        recommended_estimate() logic. No calibration mathematics is
+        reimplemented here; percentages and the factor remain supporting
+        copy in the note line.
+        """
+        summary = calibration.summary
+        sample_count = summary.sample_count
+        multiplier = summary.suggested_multiplier
+
+        # A representative "typical plan" taken from the user's own
+        # completed observations, so the recommendation is a concrete
+        # duration instead of an abstract percentage. The median is robust
+        # to outlier estimates and is rounded to whole minutes for display.
+        typical_estimate = int(round(median(
+            observation.estimated_minutes
+            for observation in calibration.observations
+        )))
+        realistic_minutes = recommended_estimate(typical_estimate, multiplier)
+        difference_minutes = realistic_minutes - typical_estimate
+
+        self.bias_card.title_label.setText("Realistic Estimate")
+        self.bias_card.set_value(
+            f"~{realistic_minutes} min",
+            f"For a typical {typical_estimate}-min plan",
+        )
+
+        self.typical_error_card.title_label.setText("Time Difference")
+        if difference_minutes == 0:
+            self.typical_error_card.set_value(
+                "On target",
+                "Your plans usually match reality",
+            )
+        elif difference_minutes > 0:
+            self.typical_error_card.set_value(
+                f"+{difference_minutes} min",
+                "More than your original estimate",
+            )
+        else:
+            self.typical_error_card.set_value(
+                f"{difference_minutes} min",
+                "Less than your original estimate",
+            )
+
+        self.confidence_card.set_value(
+            evidence_label(summary.evidence_level),
+            f"Based on {sample_count} completed activities",
+        )
+
+        note_parts = self.build_calibration_note_parts(calibration)
+        note_parts.append(f"Historical planning factor ×{multiplier:.2f}")
+        self.calibration_note_label.setText(" • ".join(note_parts))
+
+    def build_calibration_note_parts(self, calibration):
+        """Supporting copy shared by the calibration presentation states."""
         note_parts = []
         best_calibrated = self.best_calibrated_category(calibration)
         most_variable = self.most_variable_category(calibration)
@@ -794,16 +888,7 @@ class AnalyticsWindow(QWidget):
                 "Category-level calibration unlocks as a category reaches "
                 f"{MIN_OBSERVATIONS_FOR_STATS} completed activities."
             )
-
-        if summary.suggested_multiplier is not None:
-            note_parts.append(
-                "Your history suggests planning "
-                f"{format_error_percent(summary.suggested_multiplier - 1)} "
-                "more time than the estimate "
-                f"(×{summary.suggested_multiplier:.2f})."
-            )
-
-        self.calibration_note_label.setText(" • ".join(note_parts))
+        return note_parts
 
     @staticmethod
     def best_calibrated_category(calibration):
