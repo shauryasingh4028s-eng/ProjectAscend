@@ -1,0 +1,27 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.vscode/
+
+Reports/
+
+Screenshots/
+
+*.log
+
+.env
+
+build/
+dist/
+*.spec
+# Local user database - real user data is never committed.
+Database/*.db
+Database/*.db-journal
+Database/*.db-wal
+Database/*.db-shm
+
+# Test artifacts
+.pytest_cache/
