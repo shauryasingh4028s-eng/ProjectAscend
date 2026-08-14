@@ -3,21 +3,29 @@ its exact v1.1 rounding semantics, precise elapsed seconds are preserved,
 and the original planning estimate survives completion.
 """
 
+from datetime import date
+
 from Modules.activity import Activity
 from Modules.session import SessionEngine
 
 
 class TestSessionCompletion:
     def test_completion_writes_activity_and_focus_session(self, database, qapp):
+        # The activity is planned for "today": record_focus_session stamps
+        # the session's session_date with the machine's current date, so
+        # anchoring the activity and the query window to today keeps the
+        # test clock-independent on any machine.
+        session_day = date.today().isoformat()
+
         activity = Activity(
             id=None,
-            date="2026-08-14",
+            date=session_day,
             activity_type="Coding",
             name="Regression task",
             estimated_minutes=60,
         )
         database.add_activity(activity)
-        loaded = database.get_activities_for_date("2026-08-14")[0]
+        loaded = database.get_activities_for_date(session_day)[0]
 
         engine = SessionEngine(database)
         engine.start(loaded)
@@ -27,14 +35,14 @@ class TestSessionCompletion:
         engine.complete()
 
         # The activity is completed with the v1.1 minute-rounding rule.
-        refreshed = database.get_activities_for_date("2026-08-14")[0]
+        refreshed = database.get_activities_for_date(session_day)[0]
         assert refreshed.completed is True
         assert refreshed.actual_minutes == 62  # ceil(3661 / 60)
         assert refreshed.original_estimate_minutes == 60
 
         # The focus session keeps the precise seconds and the minute value.
         records = database.get_insights_records(
-            "2026-08-14", "2026-08-14"
+            session_day, session_day
         )["focus_sessions"]
         assert len(records) == 1
         assert records[0]["actual_minutes"] == 62

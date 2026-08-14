@@ -42,15 +42,38 @@ def add_activity(db, activity_date, activity_type, name, estimated, actual=None,
 
 
 def add_session(db, session_date, hour, minutes, activity_id=1):
+    """Persist a focus session dated exactly on ``session_date``.
+
+    The production path (``record_focus_session``) stamps ``session_date``
+    with the day the session was RECORDED (the machine clock). This
+    fixture therefore writes the column explicitly so a seeded session is
+    persisted exactly as the app would on that day, regardless of the
+    machine clock - the same columns and values, same table.
+    """
     started = datetime.combine(session_date, time(hour, 0))
     completed = started + timedelta(minutes=minutes)
-    db.record_focus_session(
-        activity_id,
-        started.isoformat(timespec="seconds"),
-        completed.isoformat(timespec="seconds"),
-        minutes,
-        actual_seconds=minutes * 60,
+    db.connection.execute(
+        """
+        INSERT INTO focus_sessions (
+            activity_id,
+            session_date,
+            started_at,
+            completed_at,
+            actual_minutes,
+            actual_seconds
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            activity_id,
+            session_date.isoformat(),
+            started.isoformat(timespec="seconds"),
+            completed.isoformat(timespec="seconds"),
+            minutes,
+            minutes * 60,
+        ),
     )
+    db.connection.commit()
 
 
 class TestRangeDefinitions:
