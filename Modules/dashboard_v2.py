@@ -112,28 +112,33 @@ class DashboardV2(QWidget):
         layout = QHBoxLayout()
         layout.setSpacing(16)
 
-        progress_card = ProgressCard(self.icon_factory)
-        self.daily_goal_label = progress_card.daily_goal_label
-        self.progress_bar = progress_card.progress_bar
-        self.study_time_label = progress_card.study_time_label
-        self.completed_total_label = progress_card.completed_total_label
-        self.remaining_minutes_label = progress_card.remaining_minutes_label
+        self.progress_card = ProgressCard(self.icon_factory)
+        self.daily_goal_label = self.progress_card.daily_goal_label
+        self.progress_bar = self.progress_card.progress_bar
+        self.study_time_label = self.progress_card.study_time_label
+        self.completed_total_label = self.progress_card.completed_total_label
+        self.remaining_minutes_label = self.progress_card.remaining_minutes_label
         self.update_daily_goal_label()
 
         player_card = self.create_player_progress_card()
 
-        layout.addWidget(progress_card, 3)
+        layout.addWidget(self.progress_card, 3)
         layout.addWidget(player_card, 2)
         return layout
 
     def create_player_progress_card(self):
-        player_card = PlayerCard(self.icon_factory)
-        self.level_label = player_card.level_label
-        self.current_xp_label = player_card.current_xp_label
-        self.xp_bar = player_card.xp_bar
-        self.current_streak_label = player_card.current_streak_label
-        self.best_streak_label = player_card.best_streak_label
-        return player_card
+        self.player_card = PlayerCard(self.icon_factory)
+        self.level_label = self.player_card.level_label
+        self.current_xp_label = self.player_card.current_xp_label
+        self.xp_bar = self.player_card.xp_bar
+        self.current_streak_label = self.player_card.current_streak_label
+        self.best_streak_label = self.player_card.best_streak_label
+        return self.player_card
+
+    def refresh_semantic_icons(self):
+        """Re-render dashboard metric icons with the active theme."""
+        self.progress_card.refresh_semantic_icons()
+        self.player_card.refresh_semantic_icons()
 
     def create_focus_card(self):
         self.start_button = self.button_factory.primary("Start", "fa5s.play")

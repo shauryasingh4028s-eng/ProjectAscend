@@ -42,13 +42,22 @@ from UI.theme.design_system import Colors, IconFactory, Radius, ThemeManager
 
 
 class MetricCard(QFrame):
-    """Compact overview metric used by the Insights presentation."""
+    """Compact overview metric used by the Insights presentation.
 
-    def __init__(self, title):
+    ``tint`` (blue / green / purple / amber / None) gives the card a soft
+    semantic background and its value a strong matching colour, so each
+    metric's meaning is visible at a glance. Styling comes from the shared
+    stylesheet property selectors, keeping both themes consistent.
+    """
+
+    def __init__(self, title, tint=None, tone=None):
         super().__init__()
         self.setObjectName("InsightMetric")
         self.setMinimumHeight(84)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        if tint:
+            self.setProperty("tint", tint)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -58,6 +67,8 @@ class MetricCard(QFrame):
         self.title_label.setObjectName("InsightMetricTitle")
         self.value_label = QLabel("—")
         self.value_label.setObjectName("InsightMetricValue")
+        if tone:
+            self.value_label.setProperty("tone", tone)
         self.delta_label = QLabel()
         self.delta_label.setObjectName("MetricDeltaNeutral")
         self.delta_label.setVisible(False)
@@ -98,13 +109,19 @@ class MetricCard(QFrame):
 
 
 class PatternCard(QFrame):
-    """Small pattern panel that consumes already-calculated pattern data."""
+    """Small pattern panel that consumes already-calculated pattern data.
 
-    def __init__(self, title):
+    Accepts the same semantic ``tint``/``tone`` identity as MetricCard.
+    """
+
+    def __init__(self, title, tint=None, tone=None):
         super().__init__()
         self.setObjectName("InsightPattern")
         self.setMinimumHeight(98)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        if tint:
+            self.setProperty("tint", tint)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -115,6 +132,8 @@ class PatternCard(QFrame):
         self.title_label = title_label
         self.value_label = QLabel("Not enough data yet")
         self.value_label.setObjectName("InsightPatternValue")
+        if tone:
+            self.value_label.setProperty("tone", tone)
         self.value_label.setWordWrap(True)
         self.detail_label = QLabel()
         self.detail_label.setObjectName("InsightMetricNote")
@@ -984,13 +1003,16 @@ class AnalyticsWindow(QWidget):
         self.overview_grid = QGridLayout()
         self.overview_grid.setContentsMargins(0, 0, 0, 0)
         self.overview_grid.setSpacing(10)
+        # Semantic metric zones: focus = blue, completion = green,
+        # activities = neutral, consistency = blue, streak = amber,
+        # XP = purple.
         self.overview_cards = {
-            "focus": MetricCard("Focus Time"),
-            "completion": MetricCard("Completion"),
+            "focus": MetricCard("Focus Time", tint="blue", tone="blue"),
+            "completion": MetricCard("Completion", tint="green", tone="green"),
             "tasks": MetricCard("Activities"),
-            "consistency": MetricCard("Consistency"),
-            "streak": MetricCard("Current Streak"),
-            "xp": MetricCard("XP Earned"),
+            "consistency": MetricCard("Consistency", tint="blue", tone="blue"),
+            "streak": MetricCard("Current Streak", tint="amber", tone="amber"),
+            "xp": MetricCard("XP Earned", tint="purple", tone="purple"),
         }
         for row in range(2):
             for column, key in enumerate(
@@ -1046,9 +1068,15 @@ class AnalyticsWindow(QWidget):
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(10)
-        self.bias_card = PatternCard("Estimate Bias")
-        self.typical_error_card = PatternCard("Typical Error")
-        self.confidence_card = PatternCard("Confidence")
+        self.bias_card = PatternCard(
+            "Estimate Bias", tint="blue", tone="blue"
+        )
+        self.typical_error_card = PatternCard(
+            "Typical Error", tint="amber", tone="amber"
+        )
+        self.confidence_card = PatternCard(
+            "Confidence", tint="purple", tone="purple"
+        )
         for column, card in enumerate((
             self.bias_card,
             self.typical_error_card,
@@ -1120,9 +1148,13 @@ class AnalyticsWindow(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(10)
         self.highlight_cards = {
-            "best_day": MetricCard("Best Day"),
-            "longest": MetricCard("Longest Focus Session"),
-            "improvement": MetricCard("Biggest Improvement"),
+            "best_day": MetricCard("Best Day", tint="blue", tone="blue"),
+            "longest": MetricCard(
+                "Longest Focus Session", tint="purple", tone="purple"
+            ),
+            "improvement": MetricCard(
+                "Biggest Improvement", tint="green", tone="green"
+            ),
         }
         for column, card in enumerate(self.highlight_cards.values()):
             grid.addWidget(card, 0, column)

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from Modules.date_utils import format_display_date
-from UI.theme.design_system import ThemeManager
+from UI.theme.design_system import Colors, ThemeManager
 
 
 class CardFrame(QFrame):
@@ -40,10 +40,33 @@ def make_label(text, object_name=None, alignment=None):
 
 
 class StatTile(CardFrame):
-    def __init__(self, icon, title, value_label):
+    """Metric tile with an optional semantic identity.
+
+    ``tone`` (blue / green / purple / amber / None) tints the tile's
+    background softly and colours its icon and value strongly, so every
+    metric carries a meaning at a glance. Icons are re-rendered from the
+    active theme on refresh.
+    """
+
+    TONE_ICON_COLORS = {
+        "blue": Colors.PRIMARY,
+        "green": Colors.SUCCESS,
+        "purple": Colors.ACCENT,
+        "amber": Colors.WARNING,
+    }
+
+    def __init__(self, icon_name, title, value_label, tone=None, icon_factory=None):
         super().__init__("StatTile")
         self.setMinimumHeight(82)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.icon_name = icon_name
+        self.tone = tone
+        self.icon_factory = icon_factory
+
+        if tone:
+            self.setProperty("tint", tone)
+            value_label.setProperty("tone", tone)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 9, 12, 9)
@@ -52,14 +75,13 @@ class StatTile(CardFrame):
         header_layout = QHBoxLayout()
         header_layout.setSpacing(8)
 
-        icon_label = QLabel()
-        icon_label.setFixedSize(20, 20)
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setPixmap(icon.pixmap(QSize(18, 18)))
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(20, 20)
+        self.icon_label.setAlignment(Qt.AlignCenter)
 
         title_label = make_label(title, "StatTitle")
 
-        header_layout.addWidget(icon_label)
+        header_layout.addWidget(self.icon_label)
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
@@ -72,32 +94,61 @@ class StatTile(CardFrame):
         layout.addWidget(value_label)
         self.setLayout(layout)
 
+        self.refresh_icon()
+
+    def refresh_icon(self):
+        if self.icon_factory is None:
+            return
+        color = self.TONE_ICON_COLORS.get(self.tone, Colors.TEXT_SECONDARY)
+        icon = self.icon_factory.get(self.icon_name, color)
+        self.icon_label.setPixmap(icon.pixmap(QSize(18, 18)))
+
 
 class CompactStatRow(QFrame):
-    def __init__(self, icon, title, value_label):
+    """Compact statistic row with the same optional semantic identity."""
+
+    TONE_ICON_COLORS = StatTile.TONE_ICON_COLORS
+
+    def __init__(self, icon_name, title, value_label, tone=None, icon_factory=None):
         super().__init__()
         self.setObjectName("CompactStatRow")
         self.setMinimumHeight(40)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
+        self.icon_name = icon_name
+        self.tone = tone
+        self.icon_factory = icon_factory
+
+        if tone:
+            self.setProperty("tint", tone)
+            value_label.setProperty("tone", tone)
+
         layout = QHBoxLayout()
         layout.setContentsMargins(12, 7, 12, 7)
         layout.setSpacing(8)
 
-        icon_label = QLabel()
-        icon_label.setFixedSize(18, 18)
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setPixmap(icon.pixmap(QSize(16, 16)))
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(18, 18)
+        self.icon_label.setAlignment(Qt.AlignCenter)
 
         title_label = make_label(title, "StatTitle")
         value_label.setObjectName("CompactStatValue")
         value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        layout.addWidget(icon_label)
+        layout.addWidget(self.icon_label)
         layout.addWidget(title_label)
         layout.addStretch()
         layout.addWidget(value_label)
         self.setLayout(layout)
+
+        self.refresh_icon()
+
+    def refresh_icon(self):
+        if self.icon_factory is None:
+            return
+        color = self.TONE_ICON_COLORS.get(self.tone, Colors.TEXT_SECONDARY)
+        icon = self.icon_factory.get(self.icon_name, color)
+        self.icon_label.setPixmap(icon.pixmap(QSize(16, 16)))
 
 
 class HeroCard(CardFrame):
@@ -186,33 +237,34 @@ class ProgressCard(CardFrame):
         stats_grid.setHorizontalSpacing(12)
         stats_grid.setContentsMargins(0, 0, 0, 0)
 
-        stats_grid.addWidget(
-            StatTile(
-                self.icon_factory.get("fa5s.clock"),
-                "Focus Time",
-                self.study_time_label,
-            ),
-            0,
-            0,
+        # Three semantic metric zones: focus (blue), completed (green),
+        # remaining (purple). Soft backgrounds + strong values + matching
+        # icons make each metric's meaning obvious without extra words.
+        self.focus_tile = StatTile(
+            "fa5s.clock",
+            "Focus Time",
+            self.study_time_label,
+            tone="blue",
+            icon_factory=self.icon_factory,
         )
-        stats_grid.addWidget(
-            StatTile(
-                self.icon_factory.get("fa5s.check-circle"),
-                "Completed",
-                self.completed_total_label,
-            ),
-            0,
-            1,
+        self.completed_tile = StatTile(
+            "fa5s.check-circle",
+            "Completed",
+            self.completed_total_label,
+            tone="green",
+            icon_factory=self.icon_factory,
         )
-        stats_grid.addWidget(
-            StatTile(
-                self.icon_factory.get("fa5s.bullseye"),
-                "Remaining",
-                self.remaining_minutes_label,
-            ),
-            0,
-            2,
+        self.remaining_tile = StatTile(
+            "fa5s.bullseye",
+            "Remaining",
+            self.remaining_minutes_label,
+            tone="purple",
+            icon_factory=self.icon_factory,
         )
+
+        stats_grid.addWidget(self.focus_tile, 0, 0)
+        stats_grid.addWidget(self.completed_tile, 0, 1)
+        stats_grid.addWidget(self.remaining_tile, 0, 2)
 
         for column in range(3):
             stats_grid.setColumnStretch(column, 1)
@@ -221,6 +273,15 @@ class ProgressCard(CardFrame):
         layout.addWidget(self.progress_bar)
         layout.addLayout(stats_grid)
         self.setLayout(layout)
+
+    def refresh_semantic_icons(self):
+        """Re-render the metric icons with the active theme's colours."""
+        for tile in (
+            self.focus_tile,
+            self.completed_tile,
+            self.remaining_tile,
+        ):
+            tile.refresh_icon()
 
 
 class PlayerCard(CardFrame):
@@ -260,20 +321,24 @@ class PlayerCard(CardFrame):
         streak_layout = QVBoxLayout()
         streak_layout.setContentsMargins(0, 2, 0, 0)
         streak_layout.setSpacing(6)
-        streak_layout.addWidget(
-            CompactStatRow(
-                self.icon_factory.get("fa5s.fire"),
-                "Current Streak",
-                self.current_streak_label,
-            )
+        # Streak rows carry attention (amber) and achievement (blue)
+        # identities; XP and level speak purple via the stylesheet.
+        self.current_streak_row = CompactStatRow(
+            "fa5s.fire",
+            "Current Streak",
+            self.current_streak_label,
+            tone="amber",
+            icon_factory=self.icon_factory,
         )
-        streak_layout.addWidget(
-            CompactStatRow(
-                self.icon_factory.get("fa5s.trophy"),
-                "Best Streak",
-                self.best_streak_label,
-            )
+        self.best_streak_row = CompactStatRow(
+            "fa5s.trophy",
+            "Best Streak",
+            self.best_streak_label,
+            tone="blue",
+            icon_factory=self.icon_factory,
         )
+        streak_layout.addWidget(self.current_streak_row)
+        streak_layout.addWidget(self.best_streak_row)
 
         layout.addWidget(title)
         layout.addWidget(self.level_label)
@@ -281,6 +346,11 @@ class PlayerCard(CardFrame):
         layout.addWidget(self.xp_bar)
         layout.addLayout(streak_layout)
         self.setLayout(layout)
+
+    def refresh_semantic_icons(self):
+        """Re-render the streak icons with the active theme's colours."""
+        self.current_streak_row.refresh_icon()
+        self.best_streak_row.refresh_icon()
 
 
 class FocusCard(CardFrame):
@@ -426,14 +496,12 @@ class EmptyActivityState(QWidget):
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignCenter)
 
+        # Themed via the shared stylesheet so the empty state reads
+        # correctly in both light and dark.
         icon = QLabel("+")
+        icon.setObjectName("EmptyStateIcon")
         icon.setAlignment(Qt.AlignCenter)
         icon.setFixedSize(54, 54)
-        icon.setStyleSheet(
-            "background-color: #101827; border: 1px solid #27364A; "
-            "border-radius: 27px; color: #3B82F6; font-size: 30px; "
-            "font-weight: 700;"
-        )
 
         title = QLabel("No activities planned")
         title.setObjectName("SectionTitle")

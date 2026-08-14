@@ -151,6 +151,7 @@ class AppController:
         # Reapply the shared stylesheet to pages that own a local stylesheet.
         self.shell.setStyleSheet(ThemeManager.app_stylesheet())
         self.dashboard.setStyleSheet(ThemeManager.dashboard_stylesheet())
+        self.dashboard.refresh_semantic_icons()
         self.analytics_window.setStyleSheet(ThemeManager.app_stylesheet())
         self.history_window.setStyleSheet(ThemeManager.app_stylesheet())
         self.player_progress_page.setStyleSheet(ThemeManager.app_stylesheet())

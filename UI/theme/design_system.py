@@ -180,17 +180,16 @@ class ThemeManager:
             "SUCCESS": "#22C55E", "SUCCESS_HOVER": "#4ADE80",
             "WARNING": "#F59E0B", "ERROR": "#EF4444",
         },
-        # Light: "Clear Thinking" - an ambient, soft-neutral canvas. Warm
-        # white surfaces, cool blue accents, washed semantic tints. Strong
-        # colours are reserved for values and actions; colour never shouts.
+        # Light: "Clear Thinking" - an ambient, cool-neutral workspace. The
+        # canvas is a soft blue-grey so white cards visibly float above it;
+        # washed semantic tints give metric cards a calm colour identity.
         "light": {
-            "BACKGROUND": "#F5F7FB", "SIDEBAR": "#EDF1F8", "HEADER": "#F8FAFD",
-            "SURFACE": "#FFFFFF", "SURFACE_SECONDARY": "#F8F9FD", "SURFACE_ELEVATED": "#F1F4FC",
-            "SURFACE_HOVER": "#EDF2FA", "BORDER": "#E3E8F0", "BORDER_STRONG": "#CBD5E4",
-            "TEXT_PRIMARY": "#172033", "TEXT_SECONDARY": "#596579", "TEXT_MUTED": "#75819B",
+            "BACKGROUND": "#EDF1F8", "SIDEBAR": "#E6EBF5", "HEADER": "#F5F8FC",
+            "SURFACE": "#FFFFFF", "SURFACE_SECONDARY": "#F7F9FD", "SURFACE_ELEVATED": "#EFF3FA",
+            "SURFACE_HOVER": "#E9EFF8", "BORDER": "#E1E7F0", "BORDER_STRONG": "#C9D4E4",
+            "TEXT_PRIMARY": "#172033", "TEXT_SECONDARY": "#596579", "TEXT_MUTED": "#6F7C96",
             "DISABLED": "#B0BACB",
-            # Washed tints: selected states, chips and heatmap cells read
-            # correctly on white instead of inheriting dark-navy.
+            # Washed tints: selected states, chips and metric-card zones.
             "PRIMARY_SOFT": "#E8EEFF", "PRIMARY_MUTED": "#C7D8FB",
             "ACCENT_SOFT": "#EEEAFE", "ACCENT_MUTED": "#D8CFF7",
             "SUCCESS_SOFT": "#E5F6ED", "WARNING_SOFT": "#FFF3DD",
@@ -219,6 +218,15 @@ class ThemeManager:
 
     @staticmethod
     def add_shadow(widget, blur=26, y_offset=6, alpha=120):
+        """Apply a calm, theme-aware drop shadow.
+
+        Shadows stay subtle in the light theme (soft grey, low offset) and
+        deeper in the dark theme, so depth reads the same way in both.
+        Callers may still pass explicit values to override.
+        """
+        if ThemeManager.current_theme == "light":
+            if (blur, y_offset, alpha) == (26, 6, 120):
+                blur, y_offset, alpha = 22, 4, 36
         shadow = QGraphicsDropShadowEffect(widget)
         shadow.setBlurRadius(blur)
         shadow.setOffset(0, y_offset)
@@ -319,15 +327,6 @@ class ThemeManager:
                 border-radius: {Radius.LG}px;
             }}
 
-            /* The Focus card is the dashboard's primary surface: a soft
-               brand border gives it the visual weight of "what matters
-               right now" without competing with the primary action. */
-            QFrame#FocusCard {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.PRIMARY_MUTED};
-                border-radius: {Radius.LG}px;
-            }}
-
             QFrame#StatTile,
             QFrame#CompactStatRow,
             QFrame#ActivityCard,
@@ -420,8 +419,9 @@ class ThemeManager:
                 font-weight: 800;
             }}
 
+            /* Player progression speaks purple (intelligence identity). */
             QLabel#PlayerLevel {{
-                color: {Colors.TEXT_PRIMARY};
+                color: {Colors.ACCENT};
                 font-size: 20px;
                 font-weight: 800;
             }}
@@ -440,9 +440,108 @@ class ThemeManager:
                 font-weight: 750;
             }}
 
+            /* The focus timer is the strongest number on the dashboard. */
             QLabel#Timer {{
-                color: {Colors.TEXT_PRIMARY};
+                color: {Colors.PRIMARY};
                 font-size: 52px;
+                font-weight: 800;
+            }}
+
+            /* ---------- Semantic tint zones ----------
+               Cards and metric values carry a semantic identity through
+               ``tint`` (soft background) and ``tone`` (strong value)
+               properties. Colour communicates meaning: blue = focus,
+               green = completed, purple = progression/intelligence,
+               amber = attention, slate = neutral. */
+
+            QFrame#StatTile[tint="blue"],
+            QFrame#InsightMetric[tint="blue"],
+            QFrame#InsightPattern[tint="blue"],
+            QFrame#CompactStatRow[tint="blue"] {{
+                background-color: {Colors.PRIMARY_SOFT};
+                border: 1px solid {Colors.PRIMARY_MUTED};
+            }}
+
+            QFrame#StatTile[tint="green"],
+            QFrame#InsightMetric[tint="green"],
+            QFrame#InsightPattern[tint="green"],
+            QFrame#CompactStatRow[tint="green"] {{
+                background-color: {Colors.SUCCESS_SOFT};
+                border: 1px solid #B7E3CB;
+            }}
+
+            QFrame#StatTile[tint="purple"],
+            QFrame#InsightMetric[tint="purple"],
+            QFrame#InsightPattern[tint="purple"],
+            QFrame#CompactStatRow[tint="purple"] {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT_MUTED};
+            }}
+
+            QFrame#StatTile[tint="amber"],
+            QFrame#InsightMetric[tint="amber"],
+            QFrame#InsightPattern[tint="amber"],
+            QFrame#CompactStatRow[tint="amber"] {{
+                background-color: {Colors.WARNING_SOFT};
+                border: 1px solid #EED9A8;
+            }}
+
+            QLabel#StatValue[tone="blue"],
+            QLabel#CompactStatValue[tone="blue"],
+            QLabel#InsightMetricValue[tone="blue"],
+            QLabel#InsightPatternValue[tone="blue"] {{
+                color: {Colors.PRIMARY};
+            }}
+
+            QLabel#StatValue[tone="green"],
+            QLabel#CompactStatValue[tone="green"],
+            QLabel#InsightMetricValue[tone="green"],
+            QLabel#InsightPatternValue[tone="green"] {{
+                color: {Colors.SUCCESS};
+            }}
+
+            QLabel#StatValue[tone="purple"],
+            QLabel#CompactStatValue[tone="purple"],
+            QLabel#InsightMetricValue[tone="purple"],
+            QLabel#InsightPatternValue[tone="purple"] {{
+                color: {Colors.ACCENT};
+            }}
+
+            QLabel#StatValue[tone="amber"],
+            QLabel#CompactStatValue[tone="amber"],
+            QLabel#InsightMetricValue[tone="amber"],
+            QLabel#InsightPatternValue[tone="amber"] {{
+                color: {Colors.WARNING};
+            }}
+
+            /* The Focus card is the dashboard's primary surface: a soft
+               ambient blue wash makes it the natural focal point. */
+            QFrame#FocusCard {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.PRIMARY_MUTED};
+                border-radius: {Radius.LG}px;
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 {Colors.PRIMARY_SOFT},
+                    stop: 1 {Colors.SURFACE}
+                );
+            }}
+
+            QLabel#EmptyStateIcon {{
+                background-color: {Colors.SURFACE_ELEVATED};
+                border: 1px solid {Colors.PRIMARY_MUTED};
+                border-radius: 27px;
+                color: {Colors.PRIMARY};
+                font-size: 30px;
+                font-weight: 700;
+            }}
+
+            QLabel#LevelBadge {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                border-radius: 18px;
+                color: {Colors.ACCENT};
+                font-size: 28px;
                 font-weight: 800;
             }}
 

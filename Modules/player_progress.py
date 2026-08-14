@@ -19,20 +19,28 @@ from PySide6.QtWidgets import (
 )
 
 from Modules.insights_service import format_day_count
-from UI.theme.design_system import Colors, Radius, Spacing, Typography
+from UI.theme.design_system import Spacing, Typography
 
 # Mirrors XPManager.get_level(): one level per 100 XP.
 XP_PER_LEVEL = 100
 
 
 class ProgressStatCard(QFrame):
-    """Compact metric tile reused across the progression grid."""
+    """Compact metric tile reused across the progression grid.
 
-    def __init__(self, title):
+    ``tint``/``tone`` give each progression metric a semantic identity
+    (amber = current streak, blue = best streak, green = goal days,
+    purple = completion intelligence) through the shared stylesheet.
+    """
+
+    def __init__(self, title, tint=None, tone=None):
         super().__init__()
         self.setObjectName("InsightMetric")
         self.setMinimumHeight(78)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        if tint:
+            self.setProperty("tint", tint)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.MD, Spacing.SM + 2, Spacing.MD, Spacing.SM + 2)
@@ -42,6 +50,8 @@ class ProgressStatCard(QFrame):
         self.title_label.setObjectName("InsightMetricTitle")
         self.value_label = QLabel("—")
         self.value_label.setObjectName("InsightMetricValue")
+        if tone:
+            self.value_label.setProperty("tone", tone)
         self.note_label = QLabel()
         self.note_label.setObjectName("InsightMetricNote")
 
@@ -95,16 +105,13 @@ class PlayerProgressPage(QWidget):
         layout.setContentsMargins(Spacing.XL, Spacing.LG, Spacing.XL, Spacing.LG)
         layout.setSpacing(Spacing.XL)
 
+        # Progression speaks purple: level badge, XP bar and values carry
+        # the intelligence identity across both themes. Styled by the
+        # shared stylesheet so the badge follows theme switches.
         self.level_badge = QLabel("1")
+        self.level_badge.setObjectName("LevelBadge")
         self.level_badge.setAlignment(Qt.AlignCenter)
         self.level_badge.setFixedSize(64, 64)
-        self.level_badge.setStyleSheet(
-            f"background-color: {Colors.PRIMARY_SOFT};"
-            f"border: 1px solid {Colors.PRIMARY_MUTED};"
-            f"border-radius: {Radius.XL}px;"
-            f"color: {Colors.PRIMARY_HOVER};"
-            "font-size: 28px; font-weight: 800;"
-        )
 
         detail_layout = QVBoxLayout()
         detail_layout.setSpacing(Spacing.XS + 2)
@@ -149,10 +156,18 @@ class PlayerProgressPage(QWidget):
         grid.setSpacing(Spacing.MD)
 
         self.stat_cards = {
-            "current_streak": ProgressStatCard("Current Streak"),
-            "best_streak": ProgressStatCard("Best Streak"),
-            "goal_days": ProgressStatCard("Daily Goals Met"),
-            "completion": ProgressStatCard("Goal Completion Rate"),
+            "current_streak": ProgressStatCard(
+                "Current Streak", tint="amber", tone="amber"
+            ),
+            "best_streak": ProgressStatCard(
+                "Best Streak", tint="blue", tone="blue"
+            ),
+            "goal_days": ProgressStatCard(
+                "Daily Goals Met", tint="green", tone="green"
+            ),
+            "completion": ProgressStatCard(
+                "Goal Completion Rate", tint="purple", tone="purple"
+            ),
         }
         for column, card in enumerate(self.stat_cards.values()):
             grid.addWidget(card, 0, column)

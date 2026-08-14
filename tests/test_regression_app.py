@@ -378,8 +378,8 @@ class TestInsightsV13:
 
     def test_light_theme_palette_is_ambient_and_distinct(self, app_controller):
         """The light theme is an intentional 'Clear Thinking' palette:
-        soft-neutral canvas, white surfaces, washed tints - not an inverted
-        dark theme. The dark identity stays untouched."""
+        a cool ambient canvas, white surfaces, washed tints - not an
+        inverted dark theme. The dark identity stays untouched."""
         from UI.theme.design_system import Colors, ThemeManager
 
         controller = app_controller
@@ -387,11 +387,17 @@ class TestInsightsV13:
 
         ThemeManager.set_theme("light")
         try:
-            assert Colors.BACKGROUND == "#F5F7FB"
+            # The canvas is an ambient blue-grey, clearly distinct from
+            # white cards, so surfaces separate without heavy borders.
+            assert Colors.BACKGROUND == "#EDF1F8"
+            assert Colors.SIDEBAR == "#E6EBF5"
             assert Colors.SURFACE == "#FFFFFF"
-            assert Colors.SURFACE_SECONDARY == "#F8F9FD"
+            assert Colors.SURFACE_SECONDARY == "#F7F9FD"
+            assert Colors.SURFACE_ELEVATED == "#EFF3FA"
             assert Colors.PRIMARY_SOFT == "#E8EEFF"
             assert Colors.ACCENT_SOFT == "#EEEAFE"
+            assert Colors.SUCCESS_SOFT == "#E5F6ED"
+            assert Colors.WARNING_SOFT == "#FFF3DD"
             assert Colors.TEXT_PRIMARY == "#172033"
             # Brand colours are deeper in light so text stays accessible.
             assert Colors.PRIMARY == "#3B6FF5"
@@ -401,6 +407,66 @@ class TestInsightsV13:
 
         assert Colors.BACKGROUND == "#05070C"
         assert Colors.SURFACE == "#0D1219"
+
+    def test_semantic_tints_applied_to_metric_cards(self, app_controller):
+        """Metric cards carry semantic identities (tint + tone) so colour
+        communicates meaning in both themes."""
+        from UI.theme.design_system import Colors, ThemeManager
+
+        controller = app_controller
+        controller.show_dashboard()
+        controller.show_analytics()
+        window = controller.analytics_window
+
+        # Overview zones.
+        assert window.overview_cards["focus"].property("tint") == "blue"
+        assert window.overview_cards["completion"].property("tint") == "green"
+        assert window.overview_cards["streak"].property("tint") == "amber"
+        assert window.overview_cards["xp"].property("tint") == "purple"
+        assert (
+            window.overview_cards["focus"].value_label.property("tone")
+            == "blue"
+        )
+        # Calibration pattern cards.
+        assert window.bias_card.property("tint") == "blue"
+        assert window.typical_error_card.property("tint") == "amber"
+        assert window.confidence_card.property("tint") == "purple"
+        # Highlights.
+        assert (
+            window.highlight_cards["improvement"].property("tint")
+            == "green"
+        )
+
+        # Dashboard metric tiles.
+        dashboard = controller.dashboard
+        assert dashboard.progress_card.focus_tile.property("tint") == "blue"
+        assert (
+            dashboard.progress_card.completed_tile.property("tint")
+            == "green"
+        )
+        assert (
+            dashboard.progress_card.remaining_tile.property("tint")
+            == "purple"
+        )
+        assert (
+            dashboard.player_card.current_streak_row.property("tint")
+            == "amber"
+        )
+        assert dashboard.player_card.best_streak_row.property("tint") == "blue"
+
+        # Player progression stat cards.
+        stat_cards = controller.player_progress_page.stat_cards
+        assert stat_cards["current_streak"].property("tint") == "amber"
+        assert stat_cards["goal_days"].property("tint") == "green"
+        assert stat_cards["completion"].property("tint") == "purple"
+
+        # Tints are theme-aware tokens, present in both palettes.
+        ThemeManager.set_theme("light")
+        try:
+            assert Colors.PRIMARY_SOFT != Colors.SUCCESS_SOFT
+            assert Colors.PRIMARY_SOFT != Colors.WARNING_SOFT
+        finally:
+            ThemeManager.set_theme("dark")
 
     def test_light_theme_renders_insights(self, app_controller):
         from UI.theme.design_system import ThemeManager
