@@ -263,3 +263,159 @@ class TestCalibrationPresentation:
             "Realistic time suggestions unlock"
             in window.calibration_note_label.text()
         )
+
+
+class TestInsightsV13:
+    """v1.3 Insights Experience: new sections render and stay honest."""
+
+    def test_new_sections_render_with_data(self, app_controller):
+        controller = app_controller
+        database = controller.database
+        today = date.today()
+
+        from Modules.activity import Activity
+        from datetime import datetime, time, timedelta
+
+        # Completed activities across categories for the distribution chart.
+        for category, minutes in (("Coding", 180), ("Study", 90)):
+            database.add_activity(
+                Activity(
+                    id=None,
+                    date=today.isoformat(),
+                    activity_type=category,
+                    name=f"{category} task",
+                    estimated_minutes=60,
+                )
+            )
+        for activity in database.get_activities_for_date(today.isoformat()):
+            activity.completed = True
+            activity.actual_minutes = (
+                180 if activity.activity_type == "Coding" else 90
+            )
+            database.update_activity(activity)
+
+        # Evening-heavy sessions so the rhythm section has evidence.
+        for index in range(9):
+            started = datetime.combine(
+                today - timedelta(days=index % 4), time(18, 0)
+            )
+            database.record_focus_session(
+                1,
+                started.isoformat(timespec="seconds"),
+                (started + timedelta(minutes=45)).isoformat(timespec="seconds"),
+                45,
+                actual_seconds=2700,
+            )
+
+        controller.show_analytics()
+        window = controller.analytics_window
+        data = window.dashboard_data
+
+        # Distribution section populated from real records.
+        assert data.distribution.total_minutes == 270
+        assert [item.category for item in data.distribution.items] == [
+            "Coding",
+            "Study",
+        ]
+
+        # Rhythm section claims a window only with enough sessions.
+        assert data.day_hour.status in ("ready", "learning")
+        if data.day_hour.status == "ready":
+            assert "strongest focus window" in window.rhythm_label.text()
+
+        # Overview deltas and highlights render without exceptions.
+        window.render_dashboard(data)
+        assert window.highlight_cards["best_day"].value_label.text() != "—"
+
+    def test_learned_section_empty_state(self, app_controller):
+        controller = app_controller
+        controller.show_analytics()
+        window = controller.analytics_window
+        data = window.dashboard_data
+        assert data.learned == ()
+        # The empty-state card is present in the layout.
+        assert window.learned_layout.count() == 1
+
+    def test_all_time_range_switches_cleanly(self, app_controller):
+        controller = app_controller
+        controller.show_analytics()
+        window = controller.analytics_window
+
+        window.select_range("all_time")
+        assert window.selected_range == "all_time"
+        assert window.dashboard_data.range_definition.label == "All Time"
+        assert (
+            window.dashboard_data.range_definition.previous_start_date
+            is None
+        )
+
+        window.select_range("90_days")
+        assert window.selected_range == "90_days"
+        assert window.dashboard_data.range_definition.label == "3 Months"
+
+    def test_light_theme_renders_insights(self, app_controller):
+        from UI.theme.design_system import ThemeManager
+
+        controller = app_controller
+        controller.show_analytics()
+        window = controller.analytics_window
+
+        ThemeManager.set_theme("light")
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            application = QApplication.instance()
+            application.setStyleSheet(ThemeManager.app_stylesheet())
+            window.refresh()
+            window.show()
+            application.processEvents()
+            assert window.dashboard_data is not None
+            assert window.range_caption_label.text() != ""
+        finally:
+            ThemeManager.set_theme("dark")
+            QApplication.instance().setStyleSheet(
+                ThemeManager.app_stylesheet()
+            )
+        controller = app_controller
+        database = controller.database
+        today = date.today().isoformat()
+
+        from Modules.activity import Activity
+
+        # 5 completed activities: statistics exist, but below the
+        # recommendation threshold.
+        for index in range(5):
+            database.add_activity(
+                Activity(
+                    id=None,
+                    date=today,
+                    activity_type="Study",
+                    name=f"Early task {index}",
+                    estimated_minutes=30,
+                )
+            )
+        for activity in database.get_activities_for_date(today):
+            activity.completed = True
+            activity.actual_minutes = 35
+            database.update_activity(activity)
+
+        controller.show_analytics()
+        window = controller.analytics_window
+        summary = window.dashboard_data.calibration.summary
+
+        assert summary.sample_count == 5
+        assert summary.suggested_multiplier is None
+
+        # Standard analytic titles and honest no-recommendation copy.
+        assert window.bias_card.title_label.text() == "Estimate Bias"
+        assert window.bias_card.value_label.text() == "+17%"
+        assert window.typical_error_card.title_label.text() == "Typical Error"
+        assert window.confidence_card.value_label.text() == "Early signal"
+        assert (
+            "no recommendation yet"
+            in window.confidence_card.detail_label.text()
+        )
+        assert (
+            "Realistic time suggestions unlock"
+            in window.calibration_note_label.text()
+        )

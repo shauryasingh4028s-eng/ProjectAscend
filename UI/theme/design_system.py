@@ -40,13 +40,16 @@ class Colors:
     PRIMARY_SOFT = "#152C5E"
     PRIMARY_MUTED = "#1D3A78"
     ACCENT = "#7C5CFF"
+    ACCENT_HOVER = "#9B7BFF"
     ACCENT_SOFT = "#241C4D"
+    ACCENT_MUTED = "#2E2560"
 
     # Status colours.
     SUCCESS = "#22C55E"
     SUCCESS_HOVER = "#4ADE80"
     SUCCESS_SOFT = "#0C2E1E"
     WARNING = "#F59E0B"
+    WARNING_SOFT = "#3A2A08"
     ERROR = "#EF4444"
 
     # Typography.
@@ -160,6 +163,9 @@ class ThemeManager:
             "SURFACE_HOVER": "#17212F", "BORDER": "#1B2533", "BORDER_STRONG": "#26344A",
             "TEXT_PRIMARY": "#F5F8FC", "TEXT_SECONDARY": "#C3CDDB", "TEXT_MUTED": "#7C8AA0",
             "DISABLED": "#4E5A6D",
+            "PRIMARY_SOFT": "#152C5E", "PRIMARY_MUTED": "#1D3A78",
+            "ACCENT_SOFT": "#241C4D", "ACCENT_MUTED": "#2E2560",
+            "SUCCESS_SOFT": "#0C2E1E", "WARNING_SOFT": "#3A2A08",
         },
         "light": {
             "BACKGROUND": "#F3F6FA", "SIDEBAR": "#EAF0F7", "HEADER": "#F8FAFD",
@@ -167,6 +173,11 @@ class ThemeManager:
             "SURFACE_HOVER": "#EAF1F9", "BORDER": "#D8E0EA", "BORDER_STRONG": "#B9C7D8",
             "TEXT_PRIMARY": "#172033", "TEXT_SECONDARY": "#43516A", "TEXT_MUTED": "#6D7B91",
             "DISABLED": "#A2ADBD",
+            # Soft tints are light-washed so chips and selected states read
+            # correctly on white surfaces instead of inheriting dark-navy.
+            "PRIMARY_SOFT": "#E3EDFD", "PRIMARY_MUTED": "#B9D2F7",
+            "ACCENT_SOFT": "#EDE7FB", "ACCENT_MUTED": "#CFC2F4",
+            "SUCCESS_SOFT": "#DCF3E5", "WARNING_SOFT": "#FCEFD6",
         },
     }
     current_theme = "dark"
@@ -302,6 +313,30 @@ class ThemeManager:
             QFrame#ActivityCard[selected="true"] {{
                 background-color: {Colors.PRIMARY_SOFT};
                 border: 1px solid {Colors.PRIMARY};
+            }}
+
+            QFrame#LearnedInsight {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                border-radius: {Radius.LG}px;
+            }}
+
+            QLabel#MetricDeltaPositive {{
+                color: {Colors.SUCCESS};
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
+            }}
+
+            QLabel#MetricDeltaNegative {{
+                color: {Colors.ERROR};
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
+            }}
+
+            QLabel#MetricDeltaNeutral {{
+                color: {Colors.TEXT_MUTED};
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
             }}
 
             QFrame#ActivityCard:hover,

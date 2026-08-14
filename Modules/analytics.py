@@ -32,8 +32,13 @@ from Modules.calibration_service import (
     recommended_estimate,
 )
 from Modules.date_utils import format_display_date
-from Modules.insights_service import format_day_count, format_minutes
-from UI.theme.design_system import Colors, ThemeManager
+from Modules.insights_service import (
+    LearnedInsight,
+    comparison_caption,
+    format_day_count,
+    format_minutes,
+)
+from UI.theme.design_system import Colors, Radius, ThemeManager
 
 
 class MetricCard(QFrame):
@@ -53,18 +58,43 @@ class MetricCard(QFrame):
         self.title_label.setObjectName("InsightMetricTitle")
         self.value_label = QLabel("—")
         self.value_label.setObjectName("InsightMetricValue")
+        self.delta_label = QLabel()
+        self.delta_label.setObjectName("MetricDeltaNeutral")
+        self.delta_label.setVisible(False)
         self.note_label = QLabel()
         self.note_label.setObjectName("InsightMetricNote")
         self.note_label.setWordWrap(False)
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
+        layout.addWidget(self.delta_label)
         layout.addWidget(self.note_label)
 
     def set_value(self, value, note=""):
         self.value_label.setText(value)
         self.note_label.setText(note)
         self.note_label.setVisible(bool(note))
+
+    def set_delta(self, text, direction=None):
+        """Show a comparison line such as "+18%" under the metric value.
+
+        ``direction`` is "up", "down" or None and only affects colour, so
+        the same data reads consistently across both themes. An empty text
+        hides the line.
+        """
+        if not text:
+            self.delta_label.setVisible(False)
+            return
+
+        object_name = {
+            "up": "MetricDeltaPositive",
+            "down": "MetricDeltaNegative",
+        }.get(direction, "MetricDeltaNeutral")
+        self.delta_label.setObjectName(object_name)
+        self.delta_label.setText(text)
+        self.delta_label.style().unpolish(self.delta_label)
+        self.delta_label.style().polish(self.delta_label)
+        self.delta_label.setVisible(True)
 
 
 class PatternCard(QFrame):
@@ -107,15 +137,17 @@ class FocusTrendChart(QWidget):
     def __init__(self):
         super().__init__()
         self.points = ()
+        self.granularity = "daily"
         self.hovered_index = None
         # A fixed height keeps the chart compact and guarantees the painted
         # bars always fit inside their container at every window size.
-        self.setFixedHeight(172)
+        self.setFixedHeight(190)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMouseTracking(True)
 
-    def set_points(self, points):
+    def set_points(self, points, granularity="daily"):
         self.points = tuple(points)
+        self.granularity = granularity
         self.hovered_index = None
         self.setToolTip("")
         self.update()
@@ -190,11 +222,20 @@ class FocusTrendChart(QWidget):
 
     @staticmethod
     def tooltip_for_point(point):
-        """Format exact, per-day hover copy from one calculated trend point."""
+        """Format exact, per-point hover copy from one calculated trend point."""
         return (
             f"{format_display_date(point.day, include_weekday=True)}\n"
-            f"Focus time: {format_minutes(point.focus_minutes)}"
+            f"Focus time: {format_minutes(point.focus_minutes)}\n"
+            f"Completed: {point.completed_tasks} of {point.total_tasks} planned"
         )
+
+    def point_label(self, point):
+        """Compact x-axis label appropriate to the chart granularity."""
+        if self.granularity == "monthly":
+            return point.day.strftime("%b")
+        if self.granularity == "weekly":
+            return point.day.strftime("%d %b")
+        return point.day.strftime("%a")
 
     @staticmethod
     def axis_label(minutes):
@@ -227,11 +268,12 @@ class FocusTrendChart(QWidget):
         ) = self.chart_geometry()
         count = len(self.points)
 
-        # Horizontal grid lines with compact axis captions.
+        # Horizontal grid lines with compact axis captions. Four divisions
+        # keep the scale readable without gridline noise.
         grid_font = painter.font()
         grid_font.setPointSizeF(7.5)
         painter.setFont(grid_font)
-        divisions = 3
+        divisions = 4
         for step in range(divisions + 1):
             ratio = step / divisions
             y = chart_bottom - ratio * chart_height
@@ -253,6 +295,17 @@ class FocusTrendChart(QWidget):
                 self.axis_label(maximum * ratio),
             )
 
+        # The strongest period is highlighted so high/low moments are
+        # obvious at a glance; the rest keep the primary gradient.
+        max_index = max(
+            range(count),
+            key=lambda index: (
+                self.points[index].focus_minutes,
+                -index,
+            ),
+        )
+        show_value_labels = count <= 14
+
         for index, point in enumerate(self.points):
             x = chart_left + index * (bar_width + gap)
             if maximum > 0:
@@ -261,16 +314,25 @@ class FocusTrendChart(QWidget):
                 height = 3
             y = chart_bottom - height
             is_hovered = index == self.hovered_index
+            is_strongest = index == max_index
 
             painter.setPen(Qt.NoPen)
             if point.focus_minutes > 0:
                 gradient = QLinearGradient(x, y, x, chart_bottom)
-                top_color = (
-                    QColor(Colors.PRIMARY_HOVER)
-                    if is_hovered
-                    else QColor(Colors.PRIMARY)
-                )
-                bottom_color = QColor(Colors.PRIMARY_PRESSED)
+                if is_strongest:
+                    top_color = QColor(
+                        Colors.ACCENT
+                        if not is_hovered
+                        else "#9B7BFF"
+                    )
+                    bottom_color = QColor(Colors.PRIMARY)
+                else:
+                    top_color = (
+                        QColor(Colors.PRIMARY_HOVER)
+                        if is_hovered
+                        else QColor(Colors.PRIMARY)
+                    )
+                    bottom_color = QColor(Colors.PRIMARY_PRESSED)
                 bottom_color.setAlpha(210)
                 gradient.setColorAt(0.0, top_color)
                 gradient.setColorAt(1.0, bottom_color)
@@ -282,10 +344,28 @@ class FocusTrendChart(QWidget):
                 )
             painter.drawRoundedRect(x, y, bar_width, height, 3, 3)
 
+            # Value captions above the bars when the chart is not crowded.
+            if show_value_labels and point.focus_minutes > 0:
+                painter.setPen(
+                    QColor(
+                        Colors.TEXT_SECONDARY
+                        if is_hovered or is_strongest
+                        else Colors.TEXT_MUTED
+                    )
+                )
+                painter.drawText(
+                    int(x),
+                    int(y) - 15,
+                    max(1, int(bar_width)),
+                    13,
+                    Qt.AlignHCenter | Qt.AlignBottom,
+                    self.value_label(point.focus_minutes),
+                )
+
             if count == 1:
                 label = "Today"
             elif count <= 7 or index == 0 or index == count - 1 or index % 5 == 0:
-                label = point.day.strftime("%a")
+                label = self.point_label(point)
             else:
                 label = ""
             if label:
@@ -302,6 +382,14 @@ class FocusTrendChart(QWidget):
                     Qt.AlignHCenter | Qt.AlignTop,
                     label,
                 )
+
+    @staticmethod
+    def value_label(minutes):
+        """Compact value caption used above sparse bars."""
+        hours, remaining = divmod(max(0, int(minutes or 0)), 60)
+        if hours > 0:
+            return f"{hours}h {remaining}m" if remaining else f"{hours}h"
+        return f"{remaining}m"
 
 
 class ConsistencyHeatmap(QWidget):
@@ -367,6 +455,419 @@ class ConsistencyHeatmap(QWidget):
                 item.widget().deleteLater()
 
 
+class ActivityDistributionChart(QWidget):
+    """Ranked horizontal bars answering: where is my time actually going?
+
+    Pure presentation: it receives already-computed (category, minutes,
+    percent) shares and paints them in rank order. Bars are proportional
+    to the largest category so relative magnitude is obvious at a glance.
+    """
+
+    ROW_HEIGHT = 32
+    BAR_HEIGHT = 14
+    PALETTE = (
+        Colors.PRIMARY,
+        Colors.ACCENT,
+        Colors.SUCCESS,
+        Colors.WARNING,
+        Colors.PRIMARY_MUTED,
+        Colors.ACCENT_SOFT,
+        Colors.PRIMARY_PRESSED,
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.items = ()
+        self.total_minutes = 0
+        self.hovered_index = None
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMouseTracking(True)
+
+    def set_items(self, items, total_minutes):
+        self.items = tuple(items)
+        self.total_minutes = max(0, int(total_minutes or 0))
+        self.hovered_index = None
+        self.setFixedHeight(
+            max(1, len(self.items)) * self.ROW_HEIGHT + 8
+        )
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if not self.items:
+            painter.setPen(QColor(Colors.TEXT_MUTED))
+            painter.drawText(
+                self.rect(),
+                Qt.AlignCenter,
+                "No focus time recorded yet.",
+            )
+            return
+
+        maximum = max(minutes for _, minutes, _ in self.items)
+        label_width = 150
+        percent_width = 46
+        bar_left = label_width + 14
+        bar_right = self.width() - percent_width - 12
+
+        for index, item in enumerate(self.items):
+            category, minutes, percent = item
+            row_top = 6 + index * self.ROW_HEIGHT
+            center_y = row_top + self.ROW_HEIGHT // 2
+
+            # Category label, truncated when long.
+            font = painter.font()
+            font.setPointSizeF(8.5)
+            painter.setFont(font)
+            painter.setPen(
+                QColor(
+                    Colors.TEXT_SECONDARY
+                    if index == self.hovered_index
+                    else Colors.TEXT_MUTED
+                )
+            )
+            label = category
+            if painter.fontMetrics().horizontalAdvance(label) > label_width - 8:
+                while (
+                    label
+                    and painter.fontMetrics().horizontalAdvance(label + "…")
+                    > label_width - 8
+                ):
+                    label = label[:-1]
+                label += "…"
+            painter.drawText(
+                0,
+                row_top,
+                label_width,
+                self.ROW_HEIGHT,
+                Qt.AlignLeft | Qt.AlignVCenter,
+                label,
+            )
+
+            # Bar proportional to the strongest category.
+            bar_width = max(
+                4,
+                int((minutes / maximum) * (bar_right - bar_left)),
+            )
+            bar_color = QColor(
+                self.PALETTE[index % len(self.PALETTE)]
+            )
+            bar_rect = painter.fontMetrics().boundingRect("0").height()
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(bar_color)
+            painter.drawRoundedRect(
+                bar_left,
+                center_y - self.BAR_HEIGHT // 2,
+                bar_width,
+                self.BAR_HEIGHT,
+                4,
+                4,
+            )
+
+            # Minutes and share.
+            painter.setPen(QColor(Colors.TEXT_SECONDARY))
+            painter.drawText(
+                bar_right + 2,
+                row_top,
+                self.width() - bar_right - 2,
+                self.ROW_HEIGHT,
+                Qt.AlignRight | Qt.AlignVCenter,
+                format_minutes(minutes),
+            )
+            painter.setPen(QColor(Colors.TEXT_MUTED))
+            painter.drawText(
+                bar_right - percent_width - 2,
+                row_top,
+                percent_width,
+                self.ROW_HEIGHT,
+                Qt.AlignRight | Qt.AlignVCenter,
+                f"{percent}%",
+            )
+
+    def index_at_y(self, y_position):
+        if not self.items:
+            return None
+        index = (int(y_position) - 6) // self.ROW_HEIGHT
+        if 0 <= index < len(self.items):
+            return index
+        return None
+
+    def mouseMoveEvent(self, event):
+        index = self.index_at_y(event.position().y())
+        if index != self.hovered_index:
+            self.hovered_index = index
+            self.update()
+        if index is None:
+            QToolTip.hideText()
+            return super().mouseMoveEvent(event)
+
+        category, minutes, percent = self.items[index]
+        share_text = (
+            f"{percent}% of focus time"
+            if self.total_minutes > 0
+            else "of focus time"
+        )
+        QToolTip.showText(
+            event.globalPosition().toPoint(),
+            f"{category}\n{format_minutes(minutes)} · "
+            f"{share_text}",
+            self,
+        )
+        event.accept()
+
+    def leaveEvent(self, event):
+        self.hovered_index = None
+        self.update()
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+
+class DayHourHeatmap(QWidget):
+    """Day-of-week x time-of-day focus heatmap.
+
+    Rows are days of the week, columns are Morning / Afternoon / Evening /
+    Night. Cell intensity reflects focus minutes, so a user can see their
+    weekly rhythm at a glance. The interpretation ("strongest window") is
+    computed by the service, never by this widget.
+    """
+
+    DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    BLOCK_LABELS = ("Morning", "Afternoon", "Evening", "Night")
+    ROW_HEIGHT = 24
+    HEADER_HEIGHT = 22
+    LABEL_WIDTH = 40
+    CELL_SPACING = 4
+
+    def __init__(self):
+        super().__init__()
+        self.cells = {}
+        self.max_minutes = 0
+        self.total_sessions = 0
+        self.setMouseTracking(True)
+        self.hover_cell = None
+        self.setFixedHeight(
+            self.HEADER_HEIGHT
+            + len(self.DAY_LABELS) * (self.ROW_HEIGHT + self.CELL_SPACING)
+            + 6
+        )
+
+    def set_pattern(self, pattern):
+        self.cells = {
+            (cell.day_index, cell.block_index): (
+                cell.focus_minutes,
+                cell.session_count,
+            )
+            for cell in pattern.cells
+        }
+        self.max_minutes = max(
+            (minutes for minutes, _ in self.cells.values()),
+            default=0,
+        )
+        self.total_sessions = pattern.total_sessions
+        self.hover_cell = None
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        chart_left = self.LABEL_WIDTH + 6
+        chart_width = max(10, self.width() - chart_left - 4)
+        column_width = chart_width / len(self.BLOCK_LABELS)
+
+        font = painter.font()
+        font.setPointSizeF(7.5)
+        painter.setFont(font)
+
+        # Column headers.
+        for column, block in enumerate(self.BLOCK_LABELS):
+            x = chart_left + column * column_width
+            painter.setPen(QColor(Colors.TEXT_MUTED))
+            painter.drawText(
+                int(x),
+                4,
+                int(column_width),
+                self.HEADER_HEIGHT - 4,
+                Qt.AlignHCenter | Qt.AlignVCenter,
+                block,
+            )
+
+        # Row labels and cells.
+        for row, day_label in enumerate(self.DAY_LABELS):
+            y = self.HEADER_HEIGHT + row * (self.ROW_HEIGHT + self.CELL_SPACING)
+            painter.setPen(QColor(Colors.TEXT_MUTED))
+            painter.drawText(
+                0,
+                int(y),
+                self.LABEL_WIDTH - 4,
+                self.ROW_HEIGHT,
+                Qt.AlignRight | Qt.AlignVCenter,
+                day_label,
+            )
+
+            for column in range(len(self.BLOCK_LABELS)):
+                x = chart_left + column * column_width
+                cell_rect = (
+                    int(x) + 2,
+                    int(y),
+                    max(6, int(column_width) - 4),
+                    self.ROW_HEIGHT,
+                )
+                minutes, count = self.cells.get((row, column), (0, 0))
+
+                if minutes <= 0:
+                    painter.setPen(QColor(Colors.BORDER))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRoundedRect(*cell_rect, 5, 5)
+                    continue
+
+                alpha = 40 + int(215 * (minutes / self.max_minutes))
+                color = QColor(Colors.PRIMARY)
+                color.setAlpha(alpha)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(color)
+                painter.drawRoundedRect(*cell_rect, 5, 5)
+
+        if self.max_minutes <= 0:
+            painter.setPen(QColor(Colors.TEXT_MUTED))
+            painter.drawText(
+                chart_left,
+                self.HEADER_HEIGHT,
+                max(10, self.width() - chart_left - 4),
+                self.height() - self.HEADER_HEIGHT,
+                Qt.AlignCenter,
+                "No timestamped sessions yet.",
+            )
+
+    def cell_at(self, position):
+        chart_left = self.LABEL_WIDTH + 6
+        chart_width = max(10, self.width() - chart_left - 4)
+        column_width = chart_width / len(self.BLOCK_LABELS)
+        if position.x() < chart_left:
+            return None
+        column = int((position.x() - chart_left) // column_width)
+        row = int(
+            (position.y() - self.HEADER_HEIGHT)
+            // (self.ROW_HEIGHT + self.CELL_SPACING)
+        )
+        if 0 <= row < len(self.DAY_LABELS) and 0 <= column < len(
+            self.BLOCK_LABELS
+        ):
+            return row, column
+        return None
+
+    def mouseMoveEvent(self, event):
+        cell = self.cell_at(event.position())
+        if cell != self.hover_cell:
+            self.hover_cell = cell
+        if cell is None:
+            QToolTip.hideText()
+            return super().mouseMoveEvent(event)
+
+        row, column = cell
+        minutes, count = self.cells.get((row, column), (0, 0))
+        if minutes <= 0:
+            QToolTip.hideText()
+            return super().mouseMoveEvent(event)
+
+        session_text = "session" if count == 1 else "sessions"
+        QToolTip.showText(
+            event.globalPosition().toPoint(),
+            (
+                f"{self.DAY_LABELS[row]} {self.BLOCK_LABELS[column]}\n"
+                f"{format_minutes(minutes)} focused · {count} {session_text}"
+            ),
+            self,
+        )
+        event.accept()
+
+    def leaveEvent(self, event):
+        self.hover_cell = None
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+
+class LearnedInsightCard(QFrame):
+    """One evidence-backed observation from "What Ascend Learned".
+
+    The card shows WHAT (title + description), WHY (evidence line) and HOW
+    STRONG the evidence is (confidence badge) in one glance. Styling is
+    deliberately distinct (purple intelligence accent) but stays inside the
+    shared design system.
+    """
+
+    CONFIDENCE_STYLES = {
+        "high_confidence": (
+            Colors.SUCCESS_SOFT,
+            Colors.SUCCESS,
+            Colors.SUCCESS_HOVER,
+        ),
+        "moderate_confidence": (
+            Colors.ACCENT_SOFT,
+            Colors.ACCENT_MUTED,
+            "#B7A4FF",
+        ),
+        "early_signal": (
+            Colors.WARNING_SOFT,
+            Colors.WARNING,
+            Colors.WARNING,
+        ),
+    }
+
+    def __init__(self, insight):
+        super().__init__()
+        self.setObjectName("LearnedInsight")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(5)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        glyph = QLabel("◈")
+        glyph.setAlignment(Qt.AlignCenter)
+        glyph.setFixedSize(24, 24)
+        glyph.setStyleSheet(
+            f"color: {Colors.ACCENT}; font-size: 15px; font-weight: 800;"
+        )
+
+        title_label = QLabel(insight.title)
+        title_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 14px; font-weight: 750;"
+        )
+
+        badge = QLabel(evidence_label(insight.confidence))
+        background, border, foreground = self.CONFIDENCE_STYLES.get(
+            insight.confidence,
+            (Colors.SURFACE_SECONDARY, Colors.BORDER, Colors.TEXT_MUTED),
+        )
+        badge.setStyleSheet(
+            f"color: {foreground}; background-color: {background}; "
+            f"border: 1px solid {border}; border-radius: {Radius.SM}px; "
+            "padding: 2px 8px; font-size: 10px; font-weight: 700;"
+        )
+
+        header.addWidget(glyph)
+        header.addWidget(title_label)
+        header.addStretch()
+        header.addWidget(badge)
+
+        description = QLabel(insight.description)
+        description.setWordWrap(True)
+        description.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+
+        evidence = QLabel(insight.evidence)
+        evidence.setObjectName("InsightMetricNote")
+        evidence.setWordWrap(True)
+
+        layout.addLayout(header)
+        layout.addWidget(description)
+        layout.addWidget(evidence)
+
+
 class AnalyticsWindow(QWidget):
     """Production Insights page rendered from a centralized data model."""
 
@@ -402,12 +903,17 @@ class AnalyticsWindow(QWidget):
         self.content_layout.setContentsMargins(24, 18, 24, 24)
         self.content_layout.setSpacing(14)
 
+        # The page follows the narrative: how am I doing -> what happened ->
+        # where does time go -> when do I work best -> patterns -> learned.
         self.content_layout.addLayout(self.create_header())
         self.content_layout.addWidget(self.create_overview_section())
         self.content_layout.addWidget(self.create_focus_trends_section())
-        self.content_layout.addWidget(self.create_patterns_section())
+        self.content_layout.addWidget(self.create_distribution_section())
+        self.content_layout.addWidget(self.create_day_hour_section())
         self.content_layout.addWidget(self.create_calibration_section())
         self.content_layout.addWidget(self.create_consistency_section())
+        self.content_layout.addWidget(self.create_learned_section())
+        self.content_layout.addWidget(self.create_highlights_section())
         self.content_layout.addWidget(self.create_insights_section())
         self.content_layout.addStretch()
 
@@ -415,13 +921,21 @@ class AnalyticsWindow(QWidget):
         root_layout.addWidget(scroll_area)
 
     def create_header(self):
-        """Build the in-page context line and the shared range filter buttons.
+        """Build the in-page hero and the shared range filter buttons.
 
         The range buttons are created here but displayed by the application
         shell's page header, so the page itself stays free of a second title.
         """
         layout = QHBoxLayout()
         layout.setSpacing(16)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(1)
+
+        title = QLabel("Insights")
+        title.setObjectName("Greeting")
+        subtitle = QLabel("Understand your productivity. Improve it.")
+        subtitle.setObjectName("MutedText")
 
         self.current_date_label = QLabel(format_display_date(date.today()))
         self.current_date_label.setObjectName("MutedText")
@@ -434,6 +948,8 @@ class AnalyticsWindow(QWidget):
             ("today", "Today"),
             ("7_days", "7 Days"),
             ("30_days", "30 Days"),
+            ("90_days", "3 Months"),
+            ("all_time", "All Time"),
         ):
             button = QPushButton(text)
             button.setObjectName("RangeButton")
@@ -446,26 +962,41 @@ class AnalyticsWindow(QWidget):
             self.range_buttons[key] = button
         self.range_buttons[self.selected_range].setChecked(True)
 
-        layout.addWidget(self.current_date_label)
+        caption_layout = QVBoxLayout()
+        caption_layout.setSpacing(1)
+        caption_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        caption_layout.addWidget(self.range_caption_label)
+        caption_layout.addWidget(self.current_date_label, alignment=Qt.AlignRight)
+
+        text_layout.addWidget(title)
+        text_layout.addWidget(subtitle)
+        layout.addLayout(text_layout)
         layout.addStretch()
-        layout.addWidget(self.range_caption_label)
+        layout.addLayout(caption_layout)
         return layout
 
     def create_overview_section(self):
-        section, layout = self.create_section("Overview")
+        section, layout = self.create_section("Productivity Overview")
         self.overview_grid = QGridLayout()
         self.overview_grid.setContentsMargins(0, 0, 0, 0)
         self.overview_grid.setSpacing(10)
         self.overview_cards = {
             "focus": MetricCard("Focus Time"),
-            "tasks": MetricCard("Tasks Completed"),
-            "completion": MetricCard("Completion Rate"),
+            "completion": MetricCard("Completion"),
+            "tasks": MetricCard("Activities"),
+            "consistency": MetricCard("Consistency"),
             "streak": MetricCard("Current Streak"),
             "xp": MetricCard("XP Earned"),
         }
-        for column, card in enumerate(self.overview_cards.values()):
-            self.overview_grid.addWidget(card, 0, column)
-            self.overview_grid.setColumnStretch(column, 1)
+        for row in range(2):
+            for column, key in enumerate(
+                ("focus", "completion", "tasks")
+                if row == 0
+                else ("consistency", "streak", "xp")
+            ):
+                card = self.overview_cards[key]
+                self.overview_grid.addWidget(card, row, column)
+                self.overview_grid.setColumnStretch(column, 1)
         layout.addLayout(self.overview_grid)
         return section
 
@@ -485,25 +1016,25 @@ class AnalyticsWindow(QWidget):
         layout.addWidget(self.trend_chart)
         return section
 
-    def create_patterns_section(self):
-        section, layout = self.create_section("Productivity Patterns")
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(10)
-        self.best_day_card = PatternCard("Best Day")
-        self.best_time_card = PatternCard("Best Time")
-        self.best_category_card = PatternCard("Most Productive Category")
-        for column, card in enumerate((
-            self.best_day_card,
-            self.best_time_card,
-            self.best_category_card,
-        )):
-            grid.addWidget(card, 0, column)
-            grid.setColumnStretch(column, 1)
-        self.productive_days_label = QLabel()
-        self.productive_days_label.setObjectName("MutedText")
-        layout.addLayout(grid)
-        layout.addWidget(self.productive_days_label)
+    def create_distribution_section(self):
+        section, layout = self.create_section("Where Your Time Goes")
+        self.distribution_chart = ActivityDistributionChart()
+        self.distribution_total_label = QLabel()
+        self.distribution_total_label.setObjectName("MutedText")
+        layout.addWidget(self.distribution_chart)
+        layout.addWidget(self.distribution_total_label)
+        return section
+
+    def create_day_hour_section(self):
+        section, layout = self.create_section("When You Work Best")
+        self.day_hour_heatmap = DayHourHeatmap()
+        self.rhythm_label = QLabel()
+        self.rhythm_label.setObjectName("SectionTitle")
+        self.rhythm_evidence_label = QLabel()
+        self.rhythm_evidence_label.setObjectName("MutedText")
+        layout.addWidget(self.day_hour_heatmap)
+        layout.addWidget(self.rhythm_label)
+        layout.addWidget(self.rhythm_evidence_label)
         return section
 
     def create_calibration_section(self):
@@ -571,6 +1102,30 @@ class AnalyticsWindow(QWidget):
         layout.addLayout(stats_layout)
         return section
 
+    def create_learned_section(self):
+        section, layout = self.create_section("What Ascend Learned")
+        self.learned_layout = QVBoxLayout()
+        self.learned_layout.setContentsMargins(0, 0, 0, 0)
+        self.learned_layout.setSpacing(8)
+        layout.addLayout(self.learned_layout)
+        return section
+
+    def create_highlights_section(self):
+        section, layout = self.create_section("Personal Highlights")
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(10)
+        self.highlight_cards = {
+            "best_day": MetricCard("Best Day"),
+            "longest": MetricCard("Longest Focus Session"),
+            "improvement": MetricCard("Biggest Improvement"),
+        }
+        for column, card in enumerate(self.highlight_cards.values()):
+            grid.addWidget(card, 0, column)
+            grid.setColumnStretch(column, 1)
+        layout.addLayout(grid)
+        return section
+
     def create_insights_section(self):
         section, layout = self.create_section("Your Insights")
         self.insights_layout = QVBoxLayout()
@@ -627,15 +1182,29 @@ class AnalyticsWindow(QWidget):
         self.render_dashboard(self.dashboard_data)
 
     def render_dashboard(self, data):
+        self.range_caption_label.setText(
+            comparison_caption(data.range_definition)
+        )
+
         overview = data.overview
         self.overview_cards["focus"].set_value(
             format_minutes(overview.focus_minutes),
             data.range_definition.label,
         )
+        self.overview_cards["focus"].set_delta(
+            self.format_percent_delta(overview.focus_change_percent),
+            self.delta_direction(overview.focus_change_percent),
+        )
+
         self.overview_cards["tasks"].set_value(
             str(overview.completed_tasks),
             f"of {overview.total_tasks} planned",
         )
+        self.overview_cards["tasks"].set_delta(
+            self.format_count_delta(overview.activity_change),
+            self.delta_direction(overview.activity_change),
+        )
+
         completion_note = (
             "No activities in this range"
             if overview.total_tasks == 0
@@ -644,6 +1213,15 @@ class AnalyticsWindow(QWidget):
         self.overview_cards["completion"].set_value(
             f"{overview.completion_rate}%",
             completion_note,
+        )
+        self.overview_cards["completion"].set_delta(
+            self.format_points_delta(overview.completion_change_points),
+            self.delta_direction(overview.completion_change_points),
+        )
+
+        self.overview_cards["consistency"].set_value(
+            format_day_count(overview.active_days),
+            "active days in this period",
         )
         self.overview_cards["streak"].set_value(
             format_day_count(overview.current_streak),
@@ -671,44 +1249,54 @@ class AnalyticsWindow(QWidget):
         self.trend_comparison_label.setText(trend.comparison.text)
         self.trend_comparison_label.style().unpolish(self.trend_comparison_label)
         self.trend_comparison_label.style().polish(self.trend_comparison_label)
-        self.trend_chart.set_points(trend.points)
+        self.trend_chart.set_points(trend.points, trend.granularity)
 
-        patterns = data.patterns
-        if patterns.best_day_name is None:
-            self.best_day_card.set_value(
-                "No focus data yet",
-                "Complete a session to identify a best day.",
-            )
-        else:
-            self.best_day_card.set_value(
-                patterns.best_day_name,
-                f"{format_minutes(patterns.best_day_focus_minutes)} focused",
-            )
-        if patterns.best_time_label is None:
-            self.best_time_card.set_value(
-                "Not enough data yet",
-                "Timestamped sessions unlock this pattern.",
-            )
-        else:
-            self.best_time_card.set_value(
-                patterns.best_time_label,
-                f"{format_minutes(patterns.best_time_focus_minutes)} focused",
-            )
-        if patterns.best_category_name is None:
-            self.best_category_card.set_value(
-                "No focus data yet",
-                "Complete a session to identify a category.",
-            )
-        else:
-            self.best_category_card.set_value(
-                patterns.best_category_name,
-                f"{format_minutes(patterns.best_category_focus_minutes)} focused",
-            )
-        self.productive_days_label.setText(
-            f"Productive: {format_day_count(patterns.active_days)} out of "
-            f"{format_day_count(patterns.period_days)}. "
-            "A productive day has completed work or recorded focus time."
+        distribution = data.distribution
+        self.distribution_chart.set_items(
+            [
+                (item.category, item.focus_minutes, item.percent)
+                for item in distribution.items
+            ],
+            distribution.total_minutes,
         )
+        if distribution.total_minutes > 0:
+            self.distribution_total_label.setText(
+                f"{format_minutes(distribution.total_minutes)} of focused "
+                "work recorded in this period."
+            )
+        else:
+            self.distribution_total_label.setText(
+                "Complete a focus session to see where your time goes."
+            )
+
+        day_hour = data.day_hour
+        self.day_hour_heatmap.set_pattern(day_hour)
+        if day_hour.status == "ready" and day_hour.strongest_window_label:
+            self.rhythm_label.setText(
+                f"Your strongest focus window: "
+                f"{day_hour.strongest_window_label}"
+            )
+            session_text = (
+                "session" if day_hour.window_session_count == 1 else "sessions"
+            )
+            self.rhythm_evidence_label.setText(
+                f"Based on {day_hour.window_session_count} {session_text} · "
+                f"{format_minutes(day_hour.strongest_window_minutes)} focused"
+            )
+        elif day_hour.status == "empty":
+            self.rhythm_label.setText("We're still learning your rhythm.")
+            self.rhythm_evidence_label.setText(
+                "Complete a few focus sessions to see when you work best."
+            )
+        else:
+            self.rhythm_label.setText("We're still learning your rhythm.")
+            self.rhythm_evidence_label.setText(
+                f"{day_hour.total_sessions} sessions so far - more will "
+                "reveal when you focus best."
+            )
+
+        self.render_highlights(data.highlights)
+        self.render_learned(data.learned)
 
         consistency = data.consistency
         self.heatmap.set_days(consistency.heatmap_days)
@@ -728,6 +1316,105 @@ class AnalyticsWindow(QWidget):
 
         self.render_calibration(data.calibration)
         self.render_insights(data.insights)
+
+    @staticmethod
+    def format_percent_delta(value):
+        """"+18%", "-12%" or "" for an overview comparison value."""
+        if value is None:
+            return ""
+        if value > 0:
+            return f"+{value}%"
+        return f"{value}%"
+
+    @staticmethod
+    def format_count_delta(value):
+        """"+4", "-2" or "" for an activity-count comparison value."""
+        if value is None:
+            return ""
+        return f"+{value}" if value > 0 else f"{value}"
+
+    @staticmethod
+    def format_points_delta(value):
+        """"+7 pts", "-3 pts" or "" for a completion-rate change."""
+        if value is None:
+            return ""
+        sign = "+" if value > 0 else ""
+        return f"{sign}{value} pts"
+
+    @staticmethod
+    def delta_direction(value):
+        """Map a comparison value to a semantic direction for colouring."""
+        if value is None or value == 0:
+            return None
+        return "up" if value > 0 else "down"
+
+    def render_highlights(self, highlights):
+        """Render the Personal Highlights cards with honest fallbacks."""
+        field_names = {
+            "best_day": "best_day",
+            "longest": "longest_session",
+            "improvement": "improvement",
+        }
+        fallbacks = {
+            "best_day": (
+                "—",
+                "Complete a focus session to find your best day.",
+            ),
+            "longest": (
+                "—",
+                "No focus sessions recorded in this period.",
+            ),
+            "improvement": (
+                "—",
+                "A comparison unlocks with previous-period data.",
+            ),
+        }
+        for key, card in self.highlight_cards.items():
+            highlight = getattr(highlights, field_names[key])
+            if highlight is None:
+                value, note = fallbacks[key]
+                card.set_value(value, note)
+            else:
+                card.set_value(highlight.value, highlight.note)
+
+    def render_learned(self, learned):
+        """Render the "What Ascend Learned" cards.
+
+        Empty states are deliberate: when no evidence-backed observation
+        exists yet, the section says so instead of showing generic
+        motivation.
+        """
+        self.clear_layout(self.learned_layout)
+
+        if not learned:
+            empty_card = QFrame()
+            empty_card.setObjectName("LearnedInsight")
+            empty_layout = QVBoxLayout(empty_card)
+            empty_layout.setContentsMargins(16, 12, 16, 12)
+            empty_layout.setSpacing(5)
+
+            glyph = QLabel("◈")
+            glyph.setStyleSheet(
+                f"color: {Colors.ACCENT}; font-size: 15px; font-weight: 800;"
+            )
+            title = QLabel("Ascend hasn't learned this yet.")
+            title.setStyleSheet(
+                f"color: {Colors.TEXT_PRIMARY}; font-size: 14px; font-weight: 750;"
+            )
+            description = QLabel(
+                "More activity is needed to identify reliable patterns."
+            )
+            description.setWordWrap(True)
+            description.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+
+            empty_layout.addWidget(glyph)
+            empty_layout.addWidget(title)
+            empty_layout.addWidget(description)
+            self.learned_layout.addWidget(empty_card)
+            return
+
+        for insight in learned:
+            self.learned_layout.addWidget(LearnedInsightCard(insight))
 
     def render_calibration(self, calibration):
         """Render the all-time Planning Accuracy section.
