@@ -596,3 +596,56 @@ class TestMoveCandidates:
         )
 
         assert select_move_candidates(plan.tasks, 150) == plan.move_candidates
+
+class TestTemporaryAllocations:
+    def test_no_override_preserves_expected_workload(self):
+        activities = [task("Maths", 60, activity_id=1), task("Science", 45, activity_id=2)]
+        normal = build_capacity_plan(activities, 120, [], PLAN_DATE)
+        preview = build_capacity_plan(activities, 120, [], PLAN_DATE, allocation_overrides=None)
+        assert preview == normal
+
+    def test_override_changes_only_hypothetical_workload_and_state(self):
+        activities = [task("Maths", 100, activity_id=1), task("Coding", 100, activity_id=2)]
+        normal = build_capacity_plan(activities, 180, [], PLAN_DATE)
+        preview = build_capacity_plan(activities, 180, [], PLAN_DATE, {2: 60})
+        assert normal.expected_workload_minutes == 200
+        assert normal.state == STATE_OVER_CAPACITY
+        assert preview.expected_workload_minutes == 160
+        assert preview.state == STATE_UNDER_CAPACITY
+        assert preview.planned_workload_minutes == 200
+
+    def test_smart_expected_duration_is_the_override_seed(self):
+        activities = [task("Project", 60, "Coding", activity_id=7)]
+        normal = build_capacity_plan(activities, 60, evidence(5), PLAN_DATE)
+        preview = build_capacity_plan(activities, 60, evidence(5), PLAN_DATE, {7: 55})
+        assert normal.tasks[0].expected_minutes == 70
+        assert preview.tasks[0].expected_minutes == 55
+        assert preview.state == STATE_UNDER_CAPACITY
+
+    def test_override_never_mutates_activity_fields(self):
+        activity = task("Maths", 60, activity_id=1)
+        original = (activity.estimated_minutes, activity.original_estimate_minutes)
+        build_capacity_plan([activity], 180, [], PLAN_DATE, {1: 120})
+        assert (activity.estimated_minutes, activity.original_estimate_minutes) == original
+
+    def test_completed_activities_ignore_overrides(self):
+        completed = task("Done", 60, completed=True, actual=60, activity_id=1)
+        pending = task("Next", 40, activity_id=2)
+        plan = build_capacity_plan([completed, pending], 100, [], PLAN_DATE, {1: 600})
+        assert plan.expected_workload_minutes == 40
+        assert plan.completed_count == 1
+
+    def test_unknown_override_id_is_ignored(self):
+        plan = build_capacity_plan([task(activity_id=1)], 120, [], PLAN_DATE, {999: 600})
+        assert plan.expected_workload_minutes == 60
+
+    def test_override_without_available_time_has_no_fit_verdict(self):
+        plan = build_capacity_plan([task(activity_id=1)], None, [], PLAN_DATE, {1: 120})
+        assert plan.expected_workload_minutes == 120
+        assert plan.state == STATE_NO_CAPACITY_DATA
+        assert plan.remaining_capacity_minutes is None
+
+    @pytest.mark.parametrize(("override", "expected"), [(0, 5), (700, 600)])
+    def test_override_is_clamped_to_planner_bounds(self, override, expected):
+        plan = build_capacity_plan([task(activity_id=1)], 700, [], PLAN_DATE, {1: override})
+        assert plan.tasks[0].expected_minutes == expected

@@ -250,7 +250,9 @@ def select_move_candidates(tasks, available_minutes):
     return tuple(reversed(candidates))
 
 
-def build_capacity_plan(activities, available_minutes, records, plan_date):
+def build_capacity_plan(
+    activities, available_minutes, records, plan_date, allocation_overrides=None
+):
     """Build the complete capacity picture for one date.
 
     A pure function of its inputs: the same activities, available time
@@ -262,6 +264,10 @@ def build_capacity_plan(activities, available_minutes, records, plan_date):
     The passed-in activities are never mutated.
     """
     activities = list(activities or [])
+    # What-if allocations are caller-owned, in-memory values. They are
+    # deliberately applied only after the normal Smart Estimate result is
+    # calculated, so they never become a new estimate or learning input.
+    allocation_overrides = allocation_overrides or {}
 
     completed = [activity for activity in activities if activity.completed]
     pending = [activity for activity in activities if not activity.completed]
@@ -278,6 +284,19 @@ def build_capacity_plan(activities, available_minutes, records, plan_date):
     for activity in pending:
         estimate = max(0, int(activity.estimated_minutes or 0))
         expected, basis = expected_minutes_for(activity, records)
+        # An override is meaningful only for a persisted pending activity.
+        # Unknown/stale keys are naturally ignored because this loop visits
+        # only today's current activities. Clamp defensively to the same
+        # five-minute planning bounds used by the Add Activity dialog.
+        if activity.id is not None and activity.id in allocation_overrides:
+            try:
+                override = int(allocation_overrides[activity.id])
+            except (TypeError, ValueError):
+                override = expected
+            expected = max(
+                ESTIMATE_MIN_MINUTES,
+                min(override, ESTIMATE_MAX_MINUTES),
+            )
         loads.append(
             TaskLoad(
                 activity_id=activity.id,
@@ -574,13 +593,14 @@ class CapacityService:
             available_time_store or AvailableTimeStore(database)
         )
 
-    def build_plan(self, plan_date):
+    def build_plan(self, plan_date, allocation_overrides=None):
         """Return the CapacityPlan for one date.
 
         Two reads, zero writes: the planned activities for the date and
         one snapshot of the historical plan-vs-actual records that Smart
-        Activity Estimates needs. The snapshot is reused for every
-        activity.
+        Activity Estimates needs. Optional allocation overrides are
+        caller-owned preview values and are never persisted. The snapshot
+        is reused for every activity.
         """
         activities = self.database.get_activities_for_date(plan_date)
         records = self.load_calibration_records()
@@ -591,6 +611,7 @@ class CapacityService:
             available_minutes,
             records,
             plan_date,
+            allocation_overrides=allocation_overrides,
         )
 
     def load_calibration_records(self):

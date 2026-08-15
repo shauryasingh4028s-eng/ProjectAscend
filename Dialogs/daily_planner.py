@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -15,8 +16,11 @@ from PySide6.QtWidgets import (
 from Dialogs.add_activity_dialog import AddActivityDialog
 from Modules.capacity_service import (
     CapacityService,
+    ESTIMATE_MAX_MINUTES,
+    ESTIMATE_MIN_MINUTES,
     build_headline,
     build_support_lines,
+    format_capacity_duration,
 )
 from Modules.date_utils import format_display_date
 from Modules.insights_service import format_minutes
@@ -40,6 +44,13 @@ class DailyPlanner(QWidget):
         self.capacity_service = (
             capacity_service or CapacityService(database)
         )
+        # What-if values belong only to this live planner widget. They are
+        # keyed by persisted activity ID and are never written to SQLite.
+        self.temporary_allocations = {}
+        self._distribution_source_signature = None
+        self._distribution_seeds = {}
+        self.allocation_rows = {}
+        self.preview_plan = None
         # Use tomorrow as the selected date for planning.
         tomorrow = date.today() + timedelta(days=1)
         self.selected_date = tomorrow.isoformat()
@@ -72,6 +83,7 @@ class DailyPlanner(QWidget):
 
         layout.addWidget(self.create_date_card())
         layout.addWidget(self.create_capacity_card())
+        layout.addWidget(self.create_time_distribution_section())
         layout.addWidget(self.create_activity_panel(), 1)
 
     def create_date_card(self):
@@ -205,6 +217,195 @@ class DailyPlanner(QWidget):
         self.capacity_plan = None
         return card
 
+    def create_time_distribution_section(self):
+        """Build the compact, temporary allocation what-if surface."""
+        section = QFrame()
+        section.setObjectName("ActivitySection")
+        section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
+        layout.setSpacing(Spacing.SM)
+
+        title = QLabel("Time Distribution")
+        title.setObjectName("SectionTitle")
+        layout.addWidget(title)
+
+        self.distribution_scroll = QScrollArea()
+        self.distribution_scroll.setWidgetResizable(True)
+        self.distribution_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.distribution_scroll.setMaximumHeight(196)
+        self.distribution_rows_widget = QWidget()
+        self.distribution_rows_layout = QVBoxLayout(self.distribution_rows_widget)
+        self.distribution_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.distribution_rows_layout.setSpacing(Spacing.XS)
+        self.distribution_scroll.setWidget(self.distribution_rows_widget)
+        layout.addWidget(self.distribution_scroll)
+
+        self.distribution_balance_label = QLabel()
+        self.distribution_balance_label.setObjectName("MutedText")
+        self.distribution_result_label = QLabel()
+        self.distribution_result_label.setObjectName("CompactStatValue")
+        self.distribution_result_label.setWordWrap(True)
+        layout.addWidget(self.distribution_balance_label)
+        layout.addWidget(self.distribution_result_label)
+
+        action_row = QHBoxLayout()
+        action_row.addStretch()
+        self.reset_allocations_button = self.button_factory.secondary(
+            "Reset", "fa5s.undo"
+        )
+        self.reset_allocations_button.setCursor(Qt.PointingHandCursor)
+        self.reset_allocations_button.clicked.connect(
+            self.reset_temporary_allocations
+        )
+        action_row.addWidget(self.reset_allocations_button)
+        layout.addLayout(action_row)
+
+        self.time_distribution_section = section
+        section.setVisible(False)
+        return section
+
+    def clear_distribution_rows(self):
+        while self.distribution_rows_layout.count():
+            item = self.distribution_rows_layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.allocation_rows = {}
+
+    def refresh_time_distribution(self):
+        """Render the in-memory allocation scenario and its capacity result."""
+        base_plan = self.capacity_plan
+        tasks = tuple(base_plan.tasks) if base_plan is not None else ()
+        signature = tuple((task.activity_id, task.expected_minutes) for task in tasks)
+
+        # A saved-plan change starts a fresh scenario; stale IDs have no
+        # meaning in a temporary allocation experiment.
+        if signature != self._distribution_source_signature:
+            self.temporary_allocations.clear()
+            self._distribution_source_signature = signature
+        self._distribution_seeds = {
+            task.activity_id: task.expected_minutes
+            for task in tasks if task.activity_id is not None
+        }
+        self.temporary_allocations = {
+            activity_id: minutes
+            for activity_id, minutes in self.temporary_allocations.items()
+            if activity_id in self._distribution_seeds
+        }
+
+        has_tasks = bool(tasks)
+        self.time_distribution_section.setVisible(has_tasks)
+        if not has_tasks:
+            self.preview_plan = None
+            return
+
+        self.preview_plan = self.capacity_service.build_plan(
+            self.selected_date,
+            allocation_overrides=self.temporary_allocations,
+        )
+        # One to four rows stay compact; larger plans scroll rather than
+        # pushing the saved activity list out of the planner.
+        self.distribution_scroll.setFixedHeight(
+            min(196, max(42, len(tasks) * 42 + 4))
+        )
+        self.clear_distribution_rows()
+        preview_by_id = {
+            task.activity_id: task for task in self.preview_plan.tasks
+        }
+        for task in tasks:
+            preview_task = preview_by_id.get(task.activity_id, task)
+            row = QFrame()
+            row.setObjectName("CompactStatRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(
+                Spacing.SM, Spacing.XS, Spacing.SM, Spacing.XS
+            )
+            row_layout.setSpacing(Spacing.SM)
+            name = QLabel(task.name or task.activity_type or "Activity")
+            name.setObjectName("InsightMetricTitle")
+            name.setWordWrap(True)
+            name.setMinimumWidth(0)
+            minus = self.button_factory.icon_button("fa5s.minus")
+            plus = self.button_factory.icon_button("fa5s.plus")
+            for button in (minus, plus):
+                button.setCursor(Qt.PointingHandCursor)
+            allocation = QLabel(f"{preview_task.expected_minutes} min")
+            allocation.setObjectName("CompactStatValue")
+            allocation.setAlignment(Qt.AlignCenter)
+            allocation.setMinimumWidth(72)
+            minus.setEnabled(preview_task.expected_minutes > ESTIMATE_MIN_MINUTES)
+            plus.setEnabled(preview_task.expected_minutes < ESTIMATE_MAX_MINUTES)
+            activity_id = task.activity_id
+            minus.clicked.connect(
+                lambda checked=False, key=activity_id:
+                self.change_temporary_allocation(key, -5)
+            )
+            plus.clicked.connect(
+                lambda checked=False, key=activity_id:
+                self.change_temporary_allocation(key, 5)
+            )
+            row_layout.addWidget(name, 1)
+            row_layout.addWidget(minus)
+            row_layout.addWidget(allocation)
+            row_layout.addWidget(plus)
+            self.distribution_rows_layout.addWidget(row)
+            self.allocation_rows[activity_id] = (minus, allocation, plus)
+
+        available = self.preview_plan.available_minutes
+        allocated = self.preview_plan.expected_workload_minutes
+        if available is None:
+            self.distribution_balance_label.setText(
+                f"Allocated {format_capacity_duration(allocated)}"
+            )
+            self.distribution_result_label.setText(
+                "Set available time to see if it fits."
+            )
+        else:
+            self.distribution_balance_label.setText(
+                f"Available {format_capacity_duration(available)} · "
+                f"Allocated {format_capacity_duration(allocated)}"
+            )
+            if self.preview_plan.remaining_capacity_minutes < 0:
+                over_capacity = format_capacity_duration(
+                    self.preview_plan.over_capacity_minutes
+                )
+                self.distribution_result_label.setText(
+                    f"⚠ {over_capacity} over your available time"
+                )
+            elif self.preview_plan.remaining_capacity_minutes == 0:
+                self.distribution_result_label.setText(
+                    "✓ Fits — fills your available time"
+                )
+            else:
+                remaining = format_capacity_duration(
+                    self.preview_plan.open_capacity_minutes
+                )
+                self.distribution_result_label.setText(
+                    f"✓ Fits — {remaining} remaining"
+                )
+        self.reset_allocations_button.setVisible(bool(self.temporary_allocations))
+
+    def change_temporary_allocation(self, activity_id, delta):
+        """Change only the local what-if allocation for one pending task."""
+        if activity_id not in self._distribution_seeds:
+            return
+        current = self.temporary_allocations.get(
+            activity_id, self._distribution_seeds[activity_id]
+        )
+        updated = max(
+            ESTIMATE_MIN_MINUTES,
+            min(ESTIMATE_MAX_MINUTES, current + delta),
+        )
+        if updated == self._distribution_seeds[activity_id]:
+            self.temporary_allocations.pop(activity_id, None)
+        else:
+            self.temporary_allocations[activity_id] = updated
+        self.refresh_time_distribution()
+
+    def reset_temporary_allocations(self):
+        self.temporary_allocations.clear()
+        self.refresh_time_distribution()
+
     def refresh_capacity(self):
         """Recalculate and display the capacity picture.
 
@@ -239,6 +440,7 @@ class DailyPlanner(QWidget):
             "Change" if has_available_time else "Set"
         )
         self.clear_available_time_button.setVisible(has_available_time)
+        self.refresh_time_distribution()
 
     def apply_available_time(self):
         """Store the available time the user explicitly entered."""
