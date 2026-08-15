@@ -82,15 +82,33 @@ def every_state_plan():
         "near_capacity": plan_for(tasks, available=180),
         "exactly_full": plan_for(tasks, available=175),
         "over_capacity": plan_for(tasks, available=120),
+        # Learned provenance is only surfaced where it explains the
+        # current decision: no available time yet, or over capacity.
         "learned": plan_for(
             [task("Project", 60, activity_type="Coding")],
-            available=120,
+            available=60,
             records=evidence(5),
         ),
         "learned_early": plan_for(
+            [task("Project", 120, activity_type="Coding")],
+            available=60,
+            records=evidence(5, original=120, actual=110),
+        ),
+        "learned_no_capacity": plan_for(
             [task("Project", 60, activity_type="Coding")],
-            available=120,
-            records=evidence(5, actual=50),
+            records=evidence(5),
+        ),
+        # Same learned adjustment, but the plan now fits: the sentence
+        # is provenance the user no longer needs.
+        "learned_under": plan_for(
+            [task("Project", 60, activity_type="Coding")],
+            available=180,
+            records=evidence(5),
+        ),
+        "learned_near": plan_for(
+            [task("Project", 60, activity_type="Coding")],
+            available=70,
+            records=evidence(5),
         ),
         "with_completed": plan_for(
             [
@@ -370,6 +388,7 @@ class TestStateCopy:
     def test_learned_explanation_reports_more(self):
         plan = ALL_PLANS["learned"]
 
+        assert plan.state == "over_capacity"
         assert (
             "Your history suggests ~10m more for this plan."
             in build_support_lines(plan)
@@ -378,6 +397,7 @@ class TestStateCopy:
     def test_learned_explanation_reports_less(self):
         plan = ALL_PLANS["learned_early"]
 
+        assert plan.state == "over_capacity"
         assert (
             "Your history suggests ~10m less for this plan."
             in build_support_lines(plan)
@@ -425,6 +445,121 @@ class TestStateCopy:
             assert "~0m more" not in text
             assert "~0m less" not in text
             assert "about the same" not in text
+
+class TestLearnedExplanationVisibility:
+    """The learned sentence is provenance, shown only where it helps.
+
+    Visible in no_capacity_data (no verdict yet, so the difference
+    between entered estimates and expected work is the useful thing to
+    explain) and over_capacity (the adjustment contributes to the
+    overload). Hidden everywhere else, where it is already accounted
+    for inside "Expected".
+    """
+
+    LEARNED_TEXT = "Your history suggests"
+
+    def has_explanation(self, plan):
+        return any(
+            self.LEARNED_TEXT in line for line in build_support_lines(plan)
+        )
+
+    def test_visible_in_no_capacity_state(self):
+        plan = ALL_PLANS["learned_no_capacity"]
+
+        assert plan.state == "no_capacity_data"
+        assert self.has_explanation(plan)
+
+    def test_visible_in_over_capacity_state(self):
+        plan = ALL_PLANS["learned"]
+
+        assert plan.state == "over_capacity"
+        assert self.has_explanation(plan)
+
+    def test_hidden_in_near_capacity_state(self):
+        plan = ALL_PLANS["learned_near"]
+
+        assert plan.state == "near_capacity"
+        assert plan.learned_adjustment_minutes == 10
+        assert not self.has_explanation(plan)
+
+    def test_hidden_in_under_capacity_state(self):
+        plan = ALL_PLANS["learned_under"]
+
+        assert plan.state == "under_capacity"
+        assert plan.learned_adjustment_minutes == 10
+        assert not self.has_explanation(plan)
+
+    def test_hidden_in_no_tasks_state(self):
+        plan = plan_for([], available=180, records=evidence(5))
+
+        assert plan.state == "no_tasks"
+        assert not self.has_explanation(plan)
+
+
+class TestAcceptanceScenarioAcrossAvailableTime:
+    """estimated = 60, expected = 70, available time changing.
+
+    The Windows acceptance walkthrough: the explanation appears while
+    it explains an overload and steps aside once the user has given
+    themselves enough time - without the expected workload ever moving.
+    """
+
+    TASKS = [task("Project", 60, activity_type="Coding")]
+    LEARNED_TEXT = "Your history suggests ~10m more for this plan."
+
+    def plan_at(self, available):
+        return plan_for(
+            self.TASKS, available=available, records=evidence(5)
+        )
+
+    def test_over_capacity_shows_the_explanation(self):
+        plan = self.plan_at(60)
+
+        assert plan.state == "over_capacity"
+        assert plan.expected_workload_minutes == 70
+        assert build_support_lines(plan) == (
+            "Available 1h · Expected ~1h 10m",
+            self.LEARNED_TEXT,
+        )
+
+    def test_near_capacity_hides_the_explanation(self):
+        plan = self.plan_at(70)
+
+        assert plan.state == "near_capacity"
+        assert plan.expected_workload_minutes == 70
+        assert build_support_lines(plan) == (
+            "Available 1h 10m · Expected ~1h 10m",
+            "That fills the time you have.",
+        )
+
+    def test_under_capacity_hides_the_explanation(self):
+        plan = self.plan_at(100)
+
+        assert plan.state == "under_capacity"
+        assert plan.expected_workload_minutes == 70
+        assert build_support_lines(plan) == (
+            "Available 1h 40m · Expected ~1h 10m",
+        )
+
+    def test_expected_workload_never_moves(self):
+        # The visibility rule is presentation only: the learned
+        # duration stays inside the expected workload throughout.
+        for available in (None, 0, 60, 70, 100, 600):
+            plan = self.plan_at(available)
+            assert plan.expected_workload_minutes == 70
+            assert plan.planned_workload_minutes == 60
+            assert plan.learned_adjustment_minutes == 10
+            assert plan.learned_task_count == 1
+
+    def test_smart_estimate_still_drives_the_state(self):
+        # 60 minutes of user estimate would fit 65 minutes exactly; the
+        # learned 70 is what makes it an overload, even though the
+        # explanation is what gets hidden later.
+        plan = self.plan_at(65)
+
+        assert plan.state == "over_capacity"
+        assert plan.over_capacity_minutes == 5
+
 
 class TestConciseness:
     """The card communicates a decision, not the calculation."""

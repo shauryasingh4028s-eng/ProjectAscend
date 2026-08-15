@@ -472,6 +472,24 @@ def build_balance_line(plan):
 def build_evidence_line(plan):
     """BRIEF EXPLANATION: why expected differs from what the user typed.
 
+    This line is PROVENANCE, not the decision, so it appears only where
+    it materially helps the user read the current situation:
+
+    * no_capacity_data - there is no fit verdict yet, so explaining why
+      the expected total differs from the entered estimates is the most
+      useful thing the card can say.
+    * over_capacity - the learned adjustment contributes directly to
+      the overload, so it explains part of the problem.
+
+    It is deliberately hidden in near_capacity, under_capacity and
+    no_tasks. Once the plan comfortably fits - or the user has just
+    adjusted their available time to make it fit - the adjustment is
+    already accounted for inside "Expected", and repeating its
+    provenance reads as stale detail rather than help.
+
+    Hiding the sentence never changes the arithmetic: the learned
+    duration stays in the expected workload in every state.
+
     Shown only when Smart Activity Estimates actually moved the total,
     because that is the only case where the difference needs explaining.
     When the expectation matches the user's own estimates there is
@@ -483,6 +501,9 @@ def build_evidence_line(plan):
     card.
     """
     if not plan.tasks:
+        return ""
+
+    if plan.state not in (STATE_NO_CAPACITY_DATA, STATE_OVER_CAPACITY):
         return ""
 
     adjustment = plan.learned_adjustment_minutes

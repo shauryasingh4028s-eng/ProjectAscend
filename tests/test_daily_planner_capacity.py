@@ -282,6 +282,57 @@ class TestCapacityStates:
             "Your history suggests ~10m more for this plan.",
         ]
 
+    def test_changing_available_time_hides_stale_provenance(
+        self, planner_factory, database
+    ):
+        """The real acceptance walkthrough, in the live planner.
+
+        estimated 60, expected ~70. The learned sentence explains the
+        overload at 60 minutes, then steps aside once the user gives
+        themselves enough time - while the expected workload stays 70
+        throughout.
+        """
+        planner = planner_factory(database)
+        for _ in range(5):
+            database.add_activity(Activity(
+                id=None,
+                date="2026-08-01",
+                activity_type="Coding",
+                name="Project",
+                estimated_minutes=60,
+                completed=True,
+                actual_minutes=70,
+            ))
+        add_activity(
+            database, planner, "Project", 60, activity_type="Coding"
+        )
+        planner.load_activities()
+
+        # Over capacity: the adjustment explains part of the overload.
+        self.set_available(planner, 60)
+        assert planner.capacity_plan.state == "over_capacity"
+        assert planner.capacity_plan.expected_workload_minutes == 70
+        assert "Your history suggests" in visible_support_text(planner)
+
+        # Near capacity: the user has just resolved it themselves.
+        self.set_available(planner, 70)
+        assert planner.capacity_plan.state == "near_capacity"
+        assert planner.capacity_plan.expected_workload_minutes == 70
+        assert "Your history suggests" not in visible_support_text(planner)
+
+        # Under capacity: still hidden.
+        self.set_available(planner, 100)
+        assert planner.capacity_plan.state == "under_capacity"
+        assert planner.capacity_plan.expected_workload_minutes == 70
+        assert "Your history suggests" not in visible_support_text(planner)
+
+        # Clearing returns to the no-capacity state, where the
+        # provenance is useful again.
+        planner.clear_available_time_button.click()
+        assert planner.capacity_plan.state == "no_capacity_data"
+        assert planner.capacity_plan.expected_workload_minutes == 70
+        assert "Your history suggests" in visible_support_text(planner)
+
     def test_unused_support_labels_are_hidden(
         self, planner_factory, database
     ):
