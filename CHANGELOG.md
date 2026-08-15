@@ -2,6 +2,47 @@
 
 ---
 
+# v1.4 - Actionable Intelligence
+Status: 🔄 In progress
+
+### Added
+- Smart Activity Estimates: when adding or editing an activity, Ascend
+  can suggest a more realistic duration based on the user's own
+  historical calibration evidence ("Ascend suggests ~90 min", "About
+  30 min more than your estimate.", "Based on 14 completed Coding
+  activities.").
+- Evidence selection prefers the selected category's calibration
+  multiplier when that category alone has enough completed
+  observations, otherwise falls back to the overall multiplier - the
+  supporting copy always states exactly which evidence was used.
+- The suggestion is strictly optional: Keep leaves the user's estimate
+  untouched, Use applies the suggested value to the input field only,
+  and nothing is saved until the existing Save action. Manual edits
+  always win.
+- Accepting a suggestion never triggers a follow-up suggestion derived
+  from the accepted value (no recommendation chaining); a later manual
+  edit re-anchors normally.
+
+### Design decisions
+- All evidence and thresholds come from the existing v1.2
+  CalibrationService; the suggestion value is the unmodified output of
+  the existing recommended_estimate() helper. No calibration
+  mathematics was duplicated and no threshold was changed.
+- With insufficient evidence the dialog remains exactly as clean as
+  before - no placeholder, no invented numbers.
+- A suggestion equal to the entered value is suppressed as noise, and
+  a recommendation outside the dialog's valid 5-600 min range is
+  hidden rather than clamped, so the engine's output is never
+  misrepresented.
+- Actionable copy is time-first (concrete minutes, never percentages).
+- No schema changes, no migrations, no new database writes; the
+  feature reads through the existing calibration query only.
+- The suggestion card reuses the frozen v1.3 visual system
+  (LearnedInsight surface, accent glyph, ghost buttons); no new visual
+  language.
+
+---
+
 # v1.3 - Insights Experience
 Status: ✅ Completed
 
