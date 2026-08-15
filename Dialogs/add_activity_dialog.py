@@ -2,6 +2,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -11,8 +12,10 @@ from PySide6.QtWidgets import (
 
 from Modules.activity import Activity
 from Modules.date_utils import format_display_date
+from Modules.estimate_suggestion import suggest_estimate
 from UI.theme.design_system import (
     ButtonFactory,
+    Colors,
     IconFactory,
     Spacing,
     ThemeManager,
@@ -93,6 +96,8 @@ class AddActivityDialog(QDialog):
         self.estimated_time.setSuffix(" min")
         layout.addWidget(self.estimated_time)
 
+        layout.addWidget(self.create_suggestion_area())
+
         layout.addSpacing(Spacing.SM)
 
         self.save_button = self.button_factory.primary("Save", "fa5s.check")
@@ -119,6 +124,170 @@ class AddActivityDialog(QDialog):
             self.estimated_time.setValue(
                 self.activity.estimated_minutes
             )
+
+        # Smart Activity Estimates: the historical records are read once
+        # when the dialog opens; recomputing a suggestion afterwards is
+        # pure arithmetic on that snapshot. Nothing here ever writes to
+        # the database.
+        self.calibration_records = self.load_calibration_records()
+
+        # Guard flag: True while the dialog itself is writing the spinbox
+        # (accepting a suggestion). Programmatic changes must not be
+        # treated as a new user anchor, otherwise accepting 70 would
+        # immediately produce "suggests ~80" recommendation chaining.
+        self._applying_suggestion = False
+
+        # The suggestion re-anchors whenever the USER edits the estimate,
+        # switches category, or renames the activity (the name selects
+        # the exact-activity evidence tier).
+        self.estimated_time.valueChanged.connect(self.refresh_suggestion)
+        self.activity_type.currentTextChanged.connect(
+            self.refresh_suggestion
+        )
+        self.activity_name.textChanged.connect(self.refresh_suggestion)
+
+        # Initial state: anchored to the prefilled estimate in edit mode,
+        # or the default value in add mode.
+        self.refresh_suggestion()
+
+    def load_calibration_records(self):
+        """Read the historical plan-vs-actual records, or None when the
+        data source cannot provide them. Opening the dialog must never
+        fail just because suggestion evidence is unavailable."""
+        try:
+            return self.database.get_calibration_records()
+        except Exception:
+            return None
+
+    def create_suggestion_area(self):
+        """The optional suggestion card, hidden until real evidence exists.
+
+        Visuals reuse the frozen v1.3 vocabulary only: the LearnedInsight
+        card style (the established 'Ascend intelligence' surface), the
+        accent glyph pattern from the Insights screen, MutedText support
+        copy and GhostButton actions. No new stylesheet rules.
+        """
+        self.suggestion_frame = QFrame()
+        self.suggestion_frame.setObjectName("LearnedInsight")
+
+        layout = QVBoxLayout(self.suggestion_frame)
+        layout.setContentsMargins(
+            Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD
+        )
+        layout.setSpacing(Spacing.XS)
+
+        header = QHBoxLayout()
+        header.setSpacing(Spacing.SM)
+
+        glyph = QLabel("✦")
+        glyph.setAlignment(Qt.AlignCenter)
+        glyph.setFixedSize(18, 18)
+        # Same inline accent treatment as the LearnedInsightCard glyph.
+        glyph.setStyleSheet(
+            f"color: {Colors.ACCENT}; font-size: 13px; font-weight: 800;"
+        )
+
+        self.suggestion_headline = QLabel()
+        self.suggestion_headline.setObjectName("CompactStatValue")
+
+        header.addWidget(glyph)
+        header.addWidget(self.suggestion_headline, 1)
+        layout.addLayout(header)
+
+        self.suggestion_difference = QLabel()
+        self.suggestion_difference.setObjectName("MutedText")
+        layout.addWidget(self.suggestion_difference)
+
+        self.suggestion_evidence = QLabel()
+        self.suggestion_evidence.setObjectName("MutedText")
+        layout.addWidget(self.suggestion_evidence)
+
+        layout.addSpacing(Spacing.XS)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(Spacing.SM)
+
+        self.keep_button = self.button_factory.secondary(
+            "Keep", "fa5s.undo"
+        )
+        self.keep_button.clicked.connect(self.keep_estimate)
+        self.use_button = self.button_factory.secondary(
+            "Use", "fa5s.magic"
+        )
+        self.use_button.clicked.connect(self.use_suggestion)
+
+        button_row.addStretch()
+        for button in (self.keep_button, self.use_button):
+            button.setCursor(Qt.PointingHandCursor)
+            button_row.addWidget(button)
+        layout.addLayout(button_row)
+
+        # Hidden by default: with no reliable evidence the dialog stays
+        # exactly as clean as it was before this feature existed.
+        self.suggestion_frame.setVisible(False)
+        self.current_suggestion = None
+
+        return self.suggestion_frame
+
+    def refresh_suggestion(self):
+        """Recompute the suggestion anchored to the user's current input.
+
+        Skipped while the dialog itself is applying an accepted suggestion
+        so the accepted value never becomes a new anchor (no chaining).
+        """
+        if self._applying_suggestion:
+            return
+
+        suggestion = suggest_estimate(
+            self.calibration_records,
+            self.activity_type.currentText(),
+            self.activity_name.text(),
+            self.estimated_time.value(),
+            self.estimated_time.minimum(),
+            self.estimated_time.maximum(),
+        )
+
+        self.current_suggestion = suggestion
+
+        if suggestion is None:
+            self.suggestion_frame.setVisible(False)
+            return
+
+        self.suggestion_headline.setText(suggestion.headline)
+        self.suggestion_difference.setText(suggestion.difference_text)
+        self.suggestion_evidence.setText(suggestion.evidence_text)
+        self.keep_button.setText(suggestion.keep_label)
+        self.use_button.setText(suggestion.use_label)
+        self.suggestion_frame.setVisible(True)
+
+    def keep_estimate(self):
+        """The user explicitly keeps their own estimate: the spinbox is
+        untouched and the suggestion steps aside. (Ignoring the suggestion
+        and pressing Save has exactly the same effect.)"""
+        self.current_suggestion = None
+        self.suggestion_frame.setVisible(False)
+
+    def use_suggestion(self):
+        """Apply the suggested duration to the estimate field.
+
+        Only the input field changes; nothing is saved until the user
+        presses Save. The programmatic value change is guarded so the
+        accepted value is not treated as a fresh user estimate - no
+        recommendation chaining. A later MANUAL edit re-anchors normally.
+        """
+        if self.current_suggestion is None:
+            return
+
+        self._applying_suggestion = True
+        try:
+            self.estimated_time.setValue(
+                self.current_suggestion.suggested_minutes
+            )
+        finally:
+            self._applying_suggestion = False
+
+        self.current_suggestion = None
+        self.suggestion_frame.setVisible(False)
 
     @staticmethod
     def create_field_label(text):

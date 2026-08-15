@@ -2,6 +2,62 @@
 
 ---
 
+# v1.4 - Actionable Intelligence
+Status: 🔄 In progress
+
+### Added
+- Smart Activity Estimates: when adding or editing an activity, Ascend
+  can suggest a more realistic duration learned from the user's own
+  history ("Ascend suggests ~70 min", "You typically take ~10 min
+  longer.", "Based on 12 previous \"Algebra Test\" sessions.").
+- Personalized evidence hierarchy: exact activity (same category and
+  same normalized name, 5+ completed sessions) → category (10+) →
+  overall personal history (10+) → no recommendation. The first
+  reliable tier wins; tiers are never blended, and the supporting copy
+  always states exactly which evidence was used.
+- The learned statistic is the user's typical absolute time
+  difference - median(actual − original estimate) - so behaviour like
+  "Coding usually runs +10 min" is expressed in concrete minutes at
+  any plan size, both for overruns and for finishing early.
+- Relevance window: a tier's learned bias only applies when the
+  entered estimate is within the range of that tier's observed
+  original estimates (±5 min); Ascend refuses to extrapolate beyond
+  its own evidence instead of guessing.
+- The suggestion is strictly optional: Keep leaves the user's estimate
+  untouched, Use applies the suggested value to the input field only,
+  and nothing is saved until the existing Save action. Manual edits
+  always win.
+- Accepting a suggestion never triggers a follow-up suggestion derived
+  from the accepted value (no recommendation chaining); a later manual
+  edit re-anchors normally.
+
+### Design decisions
+- Smart Estimates is an additive intelligence layer beside the v1.2
+  calibration engine: observation validity is single-sourced through
+  the engine's make_observations(), original-estimate semantics
+  prevent the model from ever learning from its own accepted
+  recommendations, and the engine's multiplier model, thresholds and
+  Planning Accuracy/Insights behaviour are untouched.
+- Activity identity is deliberately strict: exact match on category
+  plus whitespace/case-normalized name. "Maths Test 2" or "Maths Test
+  (Final)" never contribute to "Maths Test" evidence - no fuzzy
+  matching, so exact-activity evidence is never fabricated.
+- With insufficient evidence the dialog remains exactly as clean as
+  before - no placeholder, no invented numbers.
+- A suggestion that rounds back to the entered value is suppressed as
+  noise, and a recommendation outside the dialog's valid 5-600 min
+  range is hidden rather than clamped, so the learned number is never
+  misrepresented.
+- Actionable copy is time-first (concrete minutes, never percentages
+  or multipliers).
+- No schema changes, no migrations, no new database writes; the
+  feature reads through the existing calibration query only.
+- The suggestion card reuses the frozen v1.3 visual system
+  (LearnedInsight surface, accent glyph, ghost buttons); no new visual
+  language.
+
+---
+
 # v1.3 - Insights Experience
 Status: ✅ Completed
 
