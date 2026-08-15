@@ -1,4 +1,5 @@
 from Modules.analytics import AnalyticsWindow
+from Modules.capacity_service import CapacityService
 from Modules.insights_service import InsightsService
 from Modules.achievement_manager import AchievementManager
 from Modules.xp_manager import XPManager
@@ -42,11 +43,20 @@ class AppController:
             self.xp_manager,
         )
 
+        # Planned workload against the user's own stated available time.
+        # Read-only over activities; the only value it ever writes is the
+        # available time the user explicitly enters.
+        self.capacity_service = CapacityService(self.database)
+
         # Create the dashboard for tracking today's activities.
         self.dashboard = Dashboard(self.database, self)
 
         # Create the planner for saving tomorrow's activities.
-        self.tomorrow_planner = DailyPlanner(self.database, self)
+        self.tomorrow_planner = DailyPlanner(
+            self.database,
+            self,
+            capacity_service=self.capacity_service,
+        )
 
         # Create the history window for viewing previous productivity days.
         self.history_window = HistoryWindow(self.database)

@@ -7,23 +7,39 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from Dialogs.add_activity_dialog import AddActivityDialog
+from Modules.capacity_service import (
+    CapacityService,
+    build_headline,
+    build_support_lines,
+)
 from Modules.date_utils import format_display_date
 from Modules.insights_service import format_minutes
-from UI.theme.design_system import ButtonFactory, IconFactory, Spacing
+from UI.theme.design_system import (
+    ButtonFactory,
+    Colors,
+    IconFactory,
+    Spacing,
+)
 
 
 class DailyPlanner(QWidget):
-    def __init__(self, database, app_controller=None):
+    def __init__(self, database, app_controller=None, capacity_service=None):
         super().__init__()
 
         # Store the database so this screen can load saved activities.
         self.database = database
         self.app_controller = app_controller
+        # Planner Capacity Intelligence reads planned work and the user's
+        # own stated available time. It never changes an activity.
+        self.capacity_service = (
+            capacity_service or CapacityService(database)
+        )
         # Use tomorrow as the selected date for planning.
         tomorrow = date.today() + timedelta(days=1)
         self.selected_date = tomorrow.isoformat()
@@ -55,6 +71,7 @@ class DailyPlanner(QWidget):
         self.add_activity_button.clicked.connect(self.open_add_activity)
 
         layout.addWidget(self.create_date_card())
+        layout.addWidget(self.create_capacity_card())
         layout.addWidget(self.create_activity_panel(), 1)
 
     def create_date_card(self):
@@ -87,6 +104,154 @@ class DailyPlanner(QWidget):
         layout.addStretch()
         layout.addWidget(self.summary_label)
         return card
+
+    def create_capacity_card(self):
+        """The capacity intelligence card.
+
+        Reuses the frozen v1.3/v1.4 vocabulary only: the LearnedInsight
+        surface (the established "Ascend intelligence" card, as used by
+        Smart Activity Estimates), the accent glyph, CompactStatValue
+        for the headline, MutedText support copy, GhostButton actions
+        and the existing QSpinBox styling. No new stylesheet rules and
+        no new visual language.
+
+        The card is advisory: it reports numbers and offers control over
+        the user's own available-time value. It never moves, edits,
+        reorders or removes planned work.
+        """
+        card = QFrame()
+        card.setObjectName("LearnedInsight")
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(
+            Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD
+        )
+        layout.setSpacing(Spacing.XS)
+
+        header = QHBoxLayout()
+        header.setSpacing(Spacing.SM)
+
+        glyph = QLabel("✦")
+        glyph.setAlignment(Qt.AlignCenter)
+        glyph.setFixedSize(18, 18)
+        # The same inline accent treatment the Smart Estimate card uses.
+        glyph.setStyleSheet(
+            f"color: {Colors.ACCENT}; font-size: 13px; font-weight: 800;"
+        )
+
+        self.capacity_headline = QLabel()
+        self.capacity_headline.setObjectName("CompactStatValue")
+        self.capacity_headline.setWordWrap(True)
+
+        header.addWidget(glyph)
+        header.addWidget(self.capacity_headline, 1)
+        layout.addLayout(header)
+
+        # A fixed set of support lines, hidden individually when a state
+        # has nothing to say. Keeps the card from ever dominating the
+        # planner while avoiding rebuilt widgets on every refresh.
+        self.capacity_support_labels = []
+        for _ in range(4):
+            label = QLabel()
+            label.setObjectName("MutedText")
+            label.setWordWrap(True)
+            label.setVisible(False)
+            layout.addWidget(label)
+            self.capacity_support_labels.append(label)
+
+        layout.addSpacing(Spacing.XS)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(Spacing.SM)
+
+        self.available_time_caption = QLabel("Available time")
+        self.available_time_caption.setObjectName("InsightMetricTitle")
+
+        self.available_time_input = QSpinBox()
+        # 0 is a real answer ("no time that day"); the upper bound
+        # matches the existing full-day maximum used for the daily goal.
+        self.available_time_input.setRange(0, 1440)
+        self.available_time_input.setSingleStep(15)
+        self.available_time_input.setSuffix(" min")
+        self.available_time_input.setFixedWidth(130)
+
+        self.set_available_time_button = self.button_factory.secondary(
+            "Set", "fa5s.check"
+        )
+        self.set_available_time_button.clicked.connect(
+            self.apply_available_time
+        )
+        self.clear_available_time_button = self.button_factory.secondary(
+            "Clear", "fa5s.times"
+        )
+        self.clear_available_time_button.clicked.connect(
+            self.clear_available_time
+        )
+
+        controls.addWidget(self.available_time_caption)
+        controls.addWidget(self.available_time_input)
+        controls.addStretch()
+        for button in (
+            self.set_available_time_button,
+            self.clear_available_time_button,
+        ):
+            button.setCursor(Qt.PointingHandCursor)
+            controls.addWidget(button)
+
+        layout.addLayout(controls)
+
+        self.capacity_card = card
+        self.capacity_plan = None
+        return card
+
+    def refresh_capacity(self):
+        """Recalculate and display the capacity picture.
+
+        Capacity is recomputed on every read and never cached, so it
+        adapts by construction: when available time or the plan changes,
+        the next refresh simply reflects the new reality. Nothing about
+        the plan is rebuilt or rewritten.
+        """
+        plan = self.capacity_service.build_plan(self.selected_date)
+        self.capacity_plan = plan
+
+        self.capacity_headline.setText(build_headline(plan))
+
+        support_lines = build_support_lines(plan)
+        for index, label in enumerate(self.capacity_support_labels):
+            if index < len(support_lines):
+                label.setText(support_lines[index])
+                label.setVisible(True)
+            else:
+                label.clear()
+                label.setVisible(False)
+
+        # The input mirrors the stored value. With nothing stored it
+        # rests at 0 and is never presented as a suggested amount: the
+        # user's available time is only ever what they typed.
+        self.available_time_input.blockSignals(True)
+        self.available_time_input.setValue(plan.available_minutes or 0)
+        self.available_time_input.blockSignals(False)
+
+        has_available_time = plan.available_minutes is not None
+        self.set_available_time_button.setText(
+            "Change" if has_available_time else "Set"
+        )
+        self.clear_available_time_button.setVisible(has_available_time)
+
+    def apply_available_time(self):
+        """Store the available time the user explicitly entered."""
+        self.capacity_service.set_available_minutes(
+            self.selected_date,
+            self.available_time_input.value(),
+        )
+        self.refresh_capacity()
+
+    def clear_available_time(self):
+        """Forget the stated available time for this date."""
+        self.capacity_service.clear_available_minutes(self.selected_date)
+        self.refresh_capacity()
 
     def create_activity_panel(self):
         panel = QFrame()
@@ -145,6 +310,9 @@ class DailyPlanner(QWidget):
             if has_activities
             else "Nothing planned"
         )
+
+        # Keep the capacity card in step with the plan it describes.
+        self.refresh_capacity()
 
     def open_add_activity(self):
         # Open the Add Activity dialog for tomorrow's date.
