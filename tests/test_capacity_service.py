@@ -620,7 +620,7 @@ class TestTemporaryAllocations:
         preview = build_capacity_plan(activities, 60, evidence(5), PLAN_DATE, {7: 55})
         assert normal.tasks[0].expected_minutes == 70
         assert preview.tasks[0].expected_minutes == 55
-        assert preview.state == STATE_UNDER_CAPACITY
+        assert preview.state == STATE_NEAR_CAPACITY
 
     def test_override_never_mutates_activity_fields(self):
         activity = task("Maths", 60, activity_id=1)

@@ -732,9 +732,14 @@ class TestInteractiveTimeDistribution:
         before = activity_rows(database)
         minus, label, plus = planner.allocation_rows[activity.id]
         minus.click()
+
+        minus, label, plus = planner.allocation_rows[activity.id]
         assert label.text() == "55 min"
         assert planner.temporary_allocations == {activity.id: 55}
+
         plus.click()
+
+        minus, label, plus = planner.allocation_rows[activity.id]
         assert label.text() == "60 min"
         assert planner.temporary_allocations == {}
         assert activity_rows(database) == before
