@@ -277,20 +277,16 @@ class TestCapacityStates:
         assert planner.capacity_headline.text() == (
             "This plan is about 10m beyond your available time."
         )
-        assert shown == [
-            "Available 1h · Expected ~1h 10m",
-            "Your history suggests ~10m more for this plan.",
-        ]
+        assert shown == ["Available 1h · Expected ~1h 10m"]
 
-    def test_changing_available_time_hides_stale_provenance(
+    def test_changing_available_time_never_narrates_history(
         self, planner_factory, database
     ):
         """The real acceptance walkthrough, in the live planner.
 
-        estimated 60, expected ~70. The learned sentence explains the
-        overload at 60 minutes, then steps aside once the user gives
-        themselves enough time - while the expected workload stays 70
-        throughout.
+        estimated 60, expected ~70. The verdict tracks the stated time
+        while the expected workload keeps the learned duration
+        throughout - and the card never explains where it came from.
         """
         planner = planner_factory(database)
         for _ in range(5):
@@ -308,30 +304,74 @@ class TestCapacityStates:
         )
         planner.load_activities()
 
-        # Over capacity: the adjustment explains part of the overload.
-        self.set_available(planner, 60)
-        assert planner.capacity_plan.state == "over_capacity"
-        assert planner.capacity_plan.expected_workload_minutes == 70
-        assert "Your history suggests" in visible_support_text(planner)
+        for available, expected_state in (
+            (60, "over_capacity"),
+            (70, "near_capacity"),
+            (100, "under_capacity"),
+        ):
+            self.set_available(planner, available)
+            assert planner.capacity_plan.state == expected_state
+            # The learned duration stays in the expected workload...
+            assert planner.capacity_plan.expected_workload_minutes == 70
+            assert planner.capacity_plan.learned_adjustment_minutes == 10
+            # ...but is never narrated on the card.
+            text = visible_support_text(planner)
+            assert "history" not in text
+            assert "suggests" not in text
 
-        # Near capacity: the user has just resolved it themselves.
-        self.set_available(planner, 70)
-        assert planner.capacity_plan.state == "near_capacity"
-        assert planner.capacity_plan.expected_workload_minutes == 70
-        assert "Your history suggests" not in visible_support_text(planner)
-
-        # Under capacity: still hidden.
-        self.set_available(planner, 100)
-        assert planner.capacity_plan.state == "under_capacity"
-        assert planner.capacity_plan.expected_workload_minutes == 70
-        assert "Your history suggests" not in visible_support_text(planner)
-
-        # Clearing returns to the no-capacity state, where the
-        # provenance is useful again.
+        # Clearing returns to the no-capacity state - still silent.
         planner.clear_available_time_button.click()
         assert planner.capacity_plan.state == "no_capacity_data"
         assert planner.capacity_plan.expected_workload_minutes == 70
-        assert "Your history suggests" in visible_support_text(planner)
+        assert "history" not in visible_support_text(planner)
+
+    def test_multi_task_windows_scenario(
+        self, planner_factory, database
+    ):
+        """60m + 30m entered, ~110m expected, 100m available."""
+        planner = planner_factory(database)
+        for _ in range(5):
+            database.add_activity(Activity(
+                id=None,
+                date="2026-08-01",
+                activity_type="Coding",
+                name="Project",
+                estimated_minutes=60,
+                completed=True,
+                actual_minutes=70,
+            ))
+            database.add_activity(Activity(
+                id=None,
+                date="2026-08-01",
+                activity_type="Revision",
+                name="Notes",
+                estimated_minutes=30,
+                completed=True,
+                actual_minutes=40,
+            ))
+        add_activity(
+            database, planner, "Project", 60, activity_type="Coding"
+        )
+        add_activity(
+            database, planner, "Notes", 30, activity_type="Revision"
+        )
+        planner.load_activities()
+        self.set_available(planner, 100)
+
+        shown = [
+            label.text()
+            for label in planner.capacity_support_labels
+            if not label.isHidden()
+        ]
+        assert planner.capacity_plan.planned_workload_minutes == 90
+        assert planner.capacity_plan.expected_workload_minutes == 110
+        assert planner.capacity_headline.text() == (
+            "This plan is about 10m beyond your available time."
+        )
+        assert shown == [
+            "Available 1h 40m · Expected ~1h 50m",
+            "1 activity fits within your available time; 1 goes beyond.",
+        ]
 
     def test_unused_support_labels_are_hidden(
         self, planner_factory, database

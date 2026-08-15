@@ -372,10 +372,25 @@ def build_capacity_plan(activities, available_minutes, records, plan_date):
 # hierarchy and secondary lines appear only when they carry decision
 # value:
 #
-#     DECISION          "This plan is about 10m beyond your available time."
-#     KEY NUMBERS       "Available 1h · Expected ~1h 10m"
-#     BRIEF EXPLANATION "Your history suggests ~10m more for this plan."
-#     USER CONTROL      the available-time input and its actions
+#     WHAT IS HAPPENING?  "This plan is about 10m beyond your available time."
+#     HOW MUCH?           "Available 1h 40m · Expected ~1h 50m"
+#     WHAT DOES IT MEAN?  "1 activity fits within your available time; 1
+#                          goes beyond."
+#     USER CONTROL        the available-time input and its actions
+#
+# Ascend splits its intelligence responsibilities deliberately:
+#
+#     Smart Activity Estimates  explain and recommend durations for an
+#                               INDIVIDUAL activity, in the Add Activity
+#                               dialog where the user can act on them.
+#     Capacity Intelligence     tells the user whether the PLAN fits the
+#                               time available.
+#
+# So the card carries NO learned-estimate provenance: no history
+# explanation, no evidence counts, no estimate arithmetic, no
+# multipliers, no calibration wording. The learned durations are fully
+# active inside "Expected" - they are simply not narrated here, because
+# the user needs the decision rather than the calculation story.
 #
 # Time-first: minutes, hours and task counts, never percentages in an
 # actionable line. Facts are stated plainly; learned values are always
@@ -469,55 +484,6 @@ def build_balance_line(plan):
     )
 
 
-def build_evidence_line(plan):
-    """BRIEF EXPLANATION: why expected differs from what the user typed.
-
-    This line is PROVENANCE, not the decision, so it appears only where
-    it materially helps the user read the current situation:
-
-    * no_capacity_data - there is no fit verdict yet, so explaining why
-      the expected total differs from the entered estimates is the most
-      useful thing the card can say.
-    * over_capacity - the learned adjustment contributes directly to
-      the overload, so it explains part of the problem.
-
-    It is deliberately hidden in near_capacity, under_capacity and
-    no_tasks. Once the plan comfortably fits - or the user has just
-    adjusted their available time to make it fit - the adjustment is
-    already accounted for inside "Expected", and repeating its
-    provenance reads as stale detail rather than help.
-
-    Hiding the sentence never changes the arithmetic: the learned
-    duration stays in the expected workload in every state.
-
-    Shown only when Smart Activity Estimates actually moved the total,
-    because that is the only case where the difference needs explaining.
-    When the expectation matches the user's own estimates there is
-    nothing to justify, and the card stays quiet rather than reporting
-    a zero.
-
-    How many activities carried evidence, and the arithmetic behind the
-    total, are implementation detail and deliberately stay out of the
-    card.
-    """
-    if not plan.tasks:
-        return ""
-
-    if plan.state not in (STATE_NO_CAPACITY_DATA, STATE_OVER_CAPACITY):
-        return ""
-
-    adjustment = plan.learned_adjustment_minutes
-
-    if adjustment == 0:
-        return ""
-
-    direction = "more" if adjustment > 0 else "less"
-    return (
-        f"Your history suggests ~{format_capacity_duration(abs(adjustment))} "
-        f"{direction} for this plan."
-    )
-
-
 def build_fit_line(plan):
     """How the plan splits across the available time.
 
@@ -574,14 +540,13 @@ def build_completed_line(plan):
 def build_support_lines(plan):
     """The supporting lines, in the card's information hierarchy.
 
-    KEY NUMBERS, then BRIEF EXPLANATION, then the conditional fit split,
-    then completed work. Every line is optional: a state that has
-    nothing useful to add simply produces fewer lines, which is what
-    keeps the card scannable.
+    KEY NUMBERS, then what that means for the plan, then completed
+    work. Every line is optional: a state that has nothing useful to
+    add simply produces fewer lines, which is what keeps the card
+    scannable.
     """
     lines = (
         build_balance_line(plan),
-        build_evidence_line(plan),
         build_fit_line(plan),
         build_completed_line(plan),
     )

@@ -182,15 +182,18 @@ class TestHedging:
         assert "Available ~" not in balance
         assert "Available about" not in balance
 
-    def test_learned_explanation_is_hedged(self):
+    def test_learned_workload_is_hedged_without_narrating_it(self):
+        # The learned duration is inside "Expected" and is hedged
+        # there. The card never explains where it came from.
         plan = ALL_PLANS["learned"]
-        evidence_line = [
+        balance = [
             line for line in build_support_lines(plan)
-            if "history" in line
+            if "Expected" in line
         ][0]
 
-        assert evidence_line == (
-            "Your history suggests ~10m more for this plan."
+        assert "Expected ~1h 10m" in balance
+        assert not any(
+            "history" in line for line in build_support_lines(plan)
         )
 
     def test_over_capacity_amount_is_hedged(self):
@@ -385,32 +388,25 @@ class TestStateCopy:
             assert "use durations learned" not in text
             assert "add up to" not in text
 
-    def test_learned_explanation_reports_more(self):
+    def test_upward_adjustment_is_silent_but_counted(self):
         plan = ALL_PLANS["learned"]
 
         assert plan.state == "over_capacity"
-        assert (
-            "Your history suggests ~10m more for this plan."
-            in build_support_lines(plan)
+        assert plan.learned_adjustment_minutes == 10
+        assert plan.expected_workload_minutes == 70
+        assert not any(
+            "history" in line for line in build_support_lines(plan)
         )
 
-    def test_learned_explanation_reports_less(self):
+    def test_downward_adjustment_is_silent_but_counted(self):
         plan = ALL_PLANS["learned_early"]
 
         assert plan.state == "over_capacity"
-        assert (
-            "Your history suggests ~10m less for this plan."
-            in build_support_lines(plan)
+        assert plan.learned_adjustment_minutes == -10
+        assert plan.expected_workload_minutes == 110
+        assert not any(
+            "history" in line for line in build_support_lines(plan)
         )
-
-    def test_learned_explanation_uses_suggests_not_adds(self):
-        # "suggests" keeps the number a learned estimate rather than a
-        # factual guarantee.
-        plan = ALL_PLANS["learned"]
-        text = " ".join(build_support_lines(plan))
-
-        assert "suggests" in text
-        assert "adds" not in text
 
     def test_no_explanation_when_nothing_was_learned(self):
         plan = ALL_PLANS["over_capacity"]
@@ -446,80 +442,112 @@ class TestStateCopy:
             assert "~0m less" not in text
             assert "about the same" not in text
 
-class TestLearnedExplanationVisibility:
-    """The learned sentence is provenance, shown only where it helps.
+class TestNoLearnedProvenance:
+    """The capacity card carries no learned-estimate provenance at all.
 
-    Visible in no_capacity_data (no verdict yet, so the difference
-    between entered estimates and expected work is the useful thing to
-    explain) and over_capacity (the adjustment contributes to the
-    overload). Hidden everywhere else, where it is already accounted
-    for inside "Expected".
+    Smart Activity Estimates explains durations for an INDIVIDUAL
+    activity, in the Add Activity dialog where the user can act on it.
+    The capacity card answers whether the PLAN fits. It therefore never
+    narrates where the expected number came from - while still using it.
     """
 
-    LEARNED_TEXT = "Your history suggests"
+    BANNED_PROVENANCE = (
+        "Your history suggests",
+        "your history",
+        "Based on your",
+        "learned duration",
+        "learned estimate",
+        "calibration",
+        "multiplier",
+        "previous activities",
+        "add up to",
+        "use durations",
+        "evidence",
+    )
 
-    def has_explanation(self, plan):
-        return any(
-            self.LEARNED_TEXT in line for line in build_support_lines(plan)
-        )
+    @pytest.mark.parametrize("state", sorted(ALL_PLANS))
+    def test_no_provenance_wording_in_any_state(self, state):
+        for line in all_copy(ALL_PLANS[state]):
+            lowered = line.lower()
+            for phrase in self.BANNED_PROVENANCE:
+                assert phrase.lower() not in lowered, f"{state}: {line}"
 
-    def test_visible_in_no_capacity_state(self):
+    @pytest.mark.parametrize("state", sorted(ALL_PLANS))
+    def test_no_history_word_anywhere(self, state):
+        for line in all_copy(ALL_PLANS[state]):
+            assert "history" not in line.lower(), f"{state}: {line}"
+
+    def test_no_capacity_state_has_no_provenance(self):
         plan = ALL_PLANS["learned_no_capacity"]
 
         assert plan.state == "no_capacity_data"
-        assert self.has_explanation(plan)
+        assert build_support_lines(plan) == (
+            "Add the time you have available to see how it fits.",
+        )
 
-    def test_visible_in_over_capacity_state(self):
+    def test_over_capacity_state_has_no_provenance(self):
         plan = ALL_PLANS["learned"]
 
         assert plan.state == "over_capacity"
-        assert self.has_explanation(plan)
+        assert build_support_lines(plan) == (
+            "Available 1h · Expected ~1h 10m",
+        )
 
-    def test_hidden_in_near_capacity_state(self):
+    def test_near_capacity_state_has_no_provenance(self):
         plan = ALL_PLANS["learned_near"]
 
         assert plan.state == "near_capacity"
-        assert plan.learned_adjustment_minutes == 10
-        assert not self.has_explanation(plan)
+        assert not any(
+            "history" in line for line in build_support_lines(plan)
+        )
 
-    def test_hidden_in_under_capacity_state(self):
+    def test_under_capacity_state_has_no_provenance(self):
         plan = ALL_PLANS["learned_under"]
 
         assert plan.state == "under_capacity"
-        assert plan.learned_adjustment_minutes == 10
-        assert not self.has_explanation(plan)
+        assert build_support_lines(plan) == (
+            "Available 3h · Expected ~1h 10m",
+        )
 
-    def test_hidden_in_no_tasks_state(self):
+    def test_no_tasks_state_has_no_provenance(self):
         plan = plan_for([], available=180, records=evidence(5))
 
         assert plan.state == "no_tasks"
-        assert not self.has_explanation(plan)
+        assert not any(
+            "history" in line for line in build_support_lines(plan)
+        )
+
+    def test_adjustment_is_still_calculated_for_the_engine(self):
+        # Removed from the CARD, not from the model: the value stays
+        # available for tests and any future non-planner surface.
+        plan = ALL_PLANS["learned"]
+
+        assert plan.learned_adjustment_minutes == 10
+        assert plan.learned_task_count == 1
 
 
 class TestAcceptanceScenarioAcrossAvailableTime:
     """estimated = 60, expected = 70, available time changing.
 
-    The Windows acceptance walkthrough: the explanation appears while
-    it explains an overload and steps aside once the user has given
-    themselves enough time - without the expected workload ever moving.
+    The Windows acceptance walkthrough: the verdict tracks the stated
+    time while the expected workload - which includes the learned
+    duration - never moves, and no provenance is ever narrated.
     """
 
     TASKS = [task("Project", 60, activity_type="Coding")]
-    LEARNED_TEXT = "Your history suggests ~10m more for this plan."
 
     def plan_at(self, available):
         return plan_for(
             self.TASKS, available=available, records=evidence(5)
         )
 
-    def test_over_capacity_shows_the_explanation(self):
+    def test_over_capacity_is_two_lines(self):
         plan = self.plan_at(60)
 
         assert plan.state == "over_capacity"
         assert plan.expected_workload_minutes == 70
         assert build_support_lines(plan) == (
             "Available 1h · Expected ~1h 10m",
-            self.LEARNED_TEXT,
         )
 
     def test_near_capacity_hides_the_explanation(self):
@@ -561,6 +589,70 @@ class TestAcceptanceScenarioAcrossAvailableTime:
         assert plan.over_capacity_minutes == 5
 
 
+class TestMultiTaskAcceptanceScenario:
+    """60m + 30m entered, ~110m expected, 100m available.
+
+    The reported Windows scenario: the fit summary earns its place with
+    several activities, and Smart Activity Estimates still supplies the
+    expected total without being narrated.
+    """
+
+    def multi_plan(self, available):
+        records = (
+            evidence(5, "Coding", "Project", 60, 70)
+            + evidence(5, "Revision", "Notes", 30, 40)
+        )
+        return plan_for(
+            [
+                task("Project", 60, activity_type="Coding"),
+                task("Notes", 30, activity_type="Revision"),
+            ],
+            available=available,
+            records=records,
+        )
+
+    def test_expected_workload_uses_learned_durations(self):
+        plan = self.multi_plan(100)
+
+        assert plan.planned_workload_minutes == 90
+        assert plan.expected_workload_minutes == 110
+        assert plan.learned_adjustment_minutes == 20
+        assert plan.learned_task_count == 2
+
+    def test_card_matches_the_approved_layout(self):
+        plan = self.multi_plan(100)
+
+        assert build_headline(plan) == (
+            "This plan is about 10m beyond your available time."
+        )
+        assert build_support_lines(plan) == (
+            "Available 1h 40m · Expected ~1h 50m",
+            "1 activity fits within your available time; 1 goes beyond.",
+        )
+
+    def test_no_provenance_for_a_twenty_minute_adjustment(self):
+        plan = self.multi_plan(100)
+        text = " ".join(all_copy(plan))
+
+        assert "~20m" not in text
+        assert "history" not in text.lower()
+
+    def test_fit_summary_appears_for_multiple_tasks(self):
+        plan = self.multi_plan(100)
+
+        assert plan.fitting_task_count == 1
+        assert plan.beyond_task_count == 1
+        assert any(
+            "goes beyond" in line for line in build_support_lines(plan)
+        )
+
+    def test_expected_total_holds_across_available_time(self):
+        for available in (None, 0, 40, 100, 110, 300):
+            plan = self.multi_plan(available)
+            assert plan.expected_workload_minutes == 110
+            assert plan.planned_workload_minutes == 90
+
+
 class TestConciseness:
     """The card communicates a decision, not the calculation."""
 
@@ -594,7 +686,6 @@ class TestConciseness:
         )
         assert build_support_lines(plan) == (
             "Available 1h · Expected ~1h 10m",
-            "Your history suggests ~10m more for this plan.",
         )
 
     def test_no_capacity_state_is_two_lines(self):
@@ -635,17 +726,16 @@ class TestInformationSeparation:
             records=evidence(5),
         )
         headline = build_headline(plan)
-        balance, explanation = build_support_lines(plan)
+        (balance,) = build_support_lines(plan)
 
-        # DECISION
+        # WHAT IS HAPPENING?
         assert "beyond your available time" in headline
-        # FACT and LEARNED EXPECTATION, clearly distinguished
+        # HOW MUCH? - the stated fact and the learned expectation,
+        # clearly distinguished within one line.
         assert balance.startswith("Available 1h")
         assert "Expected ~1h 10m" in balance
-        # LEARNED EXPLANATION
-        assert explanation.startswith("Your history suggests")
 
-    def test_explanation_is_not_merged_into_the_numbers(self):
+    def test_numbers_line_carries_no_explanation(self):
         plan = plan_for(
             [task("Project", 60, activity_type="Coding")],
             available=60,
@@ -654,6 +744,7 @@ class TestInformationSeparation:
         balance = build_support_lines(plan)[0]
 
         assert "history" not in balance
+        assert "suggests" not in balance
 
 
 class TestUserControl:
