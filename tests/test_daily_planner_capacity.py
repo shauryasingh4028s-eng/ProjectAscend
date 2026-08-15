@@ -171,7 +171,7 @@ class TestCapacityStates:
         assert planner.capacity_headline.text() == (
             "You have about 1h 40m of open capacity."
         )
-        assert "Available 4h 0m · Expected about 2h 20m" in (
+        assert "Available 4h · Expected ~2h 20m" in (
             visible_support_text(planner)
         )
 
@@ -202,9 +202,11 @@ class TestCapacityStates:
             "This plan is about 1h 10m beyond your available time."
         )
         assert (
-            "3 activities fit; 2 would go beyond, based on the order "
-            "they're listed." in visible_support_text(planner)
+            "3 activities fit within your available time; 2 go beyond."
+            in visible_support_text(planner)
         )
+        # The ordering rule stays an internal detail of the engine.
+        assert "based on the order" not in visible_support_text(planner)
 
     def test_no_tasks_with_available_time(
         self, planner_factory, database
@@ -214,7 +216,7 @@ class TestCapacityStates:
 
         assert planner.capacity_plan.state == "no_tasks"
         assert planner.capacity_headline.text() == "Nothing planned yet."
-        assert "You have 3h 0m available." in visible_support_text(planner)
+        assert "You have 3h available." in visible_support_text(planner)
 
     def test_completed_activities_are_reported_separately(
         self, planner_factory, database
@@ -231,6 +233,82 @@ class TestCapacityStates:
         assert "1 activity already complete (1h 5m)." in (
             visible_support_text(planner)
         )
+
+    def test_one_task_over_capacity_shows_no_fit_count(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 120)
+        planner.load_activities()
+        self.set_available(planner, 60)
+
+        text = visible_support_text(planner)
+        assert planner.capacity_plan.state == "over_capacity"
+        assert "go beyond" not in text
+        assert "goes beyond" not in text
+        assert "0 activities" not in text
+
+    def test_windows_acceptance_scenario_is_concise(
+        self, planner_factory, database
+    ):
+        # Available 60, user estimate 60, learned expectation 70.
+        planner = planner_factory(database)
+        for _ in range(5):
+            database.add_activity(Activity(
+                id=None,
+                date="2026-08-01",
+                activity_type="Coding",
+                name="Project",
+                estimated_minutes=60,
+                completed=True,
+                actual_minutes=70,
+            ))
+        add_activity(
+            database, planner, "Project", 60, activity_type="Coding"
+        )
+        planner.load_activities()
+        self.set_available(planner, 60)
+
+        shown = [
+            label.text()
+            for label in planner.capacity_support_labels
+            if not label.isHidden()
+        ]
+        assert planner.capacity_headline.text() == (
+            "This plan is about 10m beyond your available time."
+        )
+        assert shown == [
+            "Available 1h · Expected ~1h 10m",
+            "Your history suggests ~10m more for this plan.",
+        ]
+
+    def test_unused_support_labels_are_hidden(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        self.set_available(planner, 240)
+
+        hidden = [
+            label for label in planner.capacity_support_labels
+            if label.isHidden()
+        ]
+        # Only the key-numbers line applies in this state.
+        assert len(hidden) == 3
+        assert all(not label.text() for label in hidden)
+
+    def test_no_learned_adjustment_shows_no_explanation(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        self.set_available(planner, 240)
+
+        text = visible_support_text(planner)
+        assert "history" not in text
+        assert "~0m" not in text
 
     def test_no_move_action_is_offered(self, planner_factory, database):
         planner = planner_factory(database)

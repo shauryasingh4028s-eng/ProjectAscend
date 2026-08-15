@@ -367,10 +367,25 @@ def build_capacity_plan(activities, available_minutes, records, plan_date):
 # ---------------------------------------------------------------------------
 # Copy.
 #
-# Time-first: minutes, hours and task counts. Never percentages in an
-# actionable line. Facts are stated plainly; learned values always carry
-# an "about", so an inference is never presented as a certainty. The
-# tone is neutral throughout - capacity is decision support, not a score.
+# The card is decision support, so it communicates the DECISION, not the
+# calculation that produced it. Lines are emitted in one deliberate
+# hierarchy and secondary lines appear only when they carry decision
+# value:
+#
+#     DECISION          "This plan is about 10m beyond your available time."
+#     KEY NUMBERS       "Available 1h · Expected ~1h 10m"
+#     BRIEF EXPLANATION "Your history suggests ~10m more for this plan."
+#     USER CONTROL      the available-time input and its actions
+#
+# Time-first: minutes, hours and task counts, never percentages in an
+# actionable line. Facts are stated plainly; learned values are always
+# hedged ("about" in a headline, "~" in a supporting line) so an
+# inference is never presented as a certainty. The tone stays neutral -
+# capacity is decision support, not a score.
+#
+# Internal detail - how many activities carried learned evidence, the
+# arithmetic behind the expected total, and the ordering rule used to
+# decide the fit - stays in the engine and out of the card.
 # ---------------------------------------------------------------------------
 
 
@@ -378,8 +393,25 @@ def activity_noun(count):
     return "activity" if count == 1 else "activities"
 
 
+def format_capacity_duration(minutes):
+    """Format a duration for the capacity card.
+
+    A thin presentation wrapper over the shared ``format_minutes``: a
+    whole number of hours reads as "1h" rather than "1h 0m", which keeps
+    the card scannable. Every other duration is delegated unchanged, so
+    there is exactly one duration format in the product.
+    """
+    total = max(0, int(minutes or 0))
+    hours, remaining_minutes = divmod(total, 60)
+
+    if hours > 0 and remaining_minutes == 0:
+        return f"{hours}h"
+
+    return format_minutes(total)
+
+
 def build_headline(plan):
-    """The one line that states the situation."""
+    """DECISION: the one line that states the situation."""
     if plan.state == STATE_NO_TASKS:
         if plan.completed_count > 0:
             return "Everything planned is complete."
@@ -391,107 +423,119 @@ def build_headline(plan):
                 return "Everything planned is complete."
             return "Nothing planned yet."
         return (
-            f"About {format_minutes(plan.expected_workload_minutes)} "
+            f"About {format_capacity_duration(plan.expected_workload_minutes)} "
             "of expected work planned."
         )
 
     if plan.state == STATE_OVER_CAPACITY:
         return (
             f"This plan is about "
-            f"{format_minutes(plan.over_capacity_minutes)} beyond your "
-            "available time."
+            f"{format_capacity_duration(plan.over_capacity_minutes)} beyond "
+            "your available time."
         )
 
     if plan.state == STATE_NEAR_CAPACITY:
         return "This plan uses almost all of your available time."
 
     return (
-        f"You have about {format_minutes(plan.open_capacity_minutes)} "
+        f"You have about "
+        f"{format_capacity_duration(plan.open_capacity_minutes)} "
         "of open capacity."
     )
 
 
 def build_balance_line(plan):
-    """The supporting fact line: stated time against expected work."""
+    """KEY NUMBERS: the stated time against the expected work.
+
+    One fact and one learned estimate, side by side and clearly
+    distinguished - "Available" is what the user told Ascend, "Expected"
+    is what Ascend thinks the plan will cost.
+    """
     if plan.state == STATE_NO_CAPACITY_DATA:
         return "Add the time you have available to see how it fits."
 
     if plan.available_minutes is None:
         return ""
 
-    available_text = f"Available {format_minutes(plan.available_minutes)}"
-
     if plan.state == STATE_NO_TASKS:
-        return f"You have {format_minutes(plan.available_minutes)} available."
+        return (
+            f"You have {format_capacity_duration(plan.available_minutes)} "
+            "available."
+        )
 
     return (
-        f"{available_text} · Expected about "
-        f"{format_minutes(plan.expected_workload_minutes)}"
+        f"Available {format_capacity_duration(plan.available_minutes)} · "
+        f"Expected ~{format_capacity_duration(plan.expected_workload_minutes)}"
     )
 
 
 def build_evidence_line(plan):
-    """Explain where the expected number came from.
+    """BRIEF EXPLANATION: why expected differs from what the user typed.
 
-    Separates the factual sum of the user's estimates from the learned
-    adjustment, and names how many activities the learning covered, so
-    "expected" is always traceable.
+    Shown only when Smart Activity Estimates actually moved the total,
+    because that is the only case where the difference needs explaining.
+    When the expectation matches the user's own estimates there is
+    nothing to justify, and the card stays quiet rather than reporting
+    a zero.
+
+    How many activities carried evidence, and the arithmetic behind the
+    total, are implementation detail and deliberately stay out of the
+    card.
     """
     if not plan.tasks:
         return ""
 
-    estimates_text = (
-        f"Your estimates add up to "
-        f"{format_minutes(plan.planned_workload_minutes)}"
+    adjustment = plan.learned_adjustment_minutes
+
+    if adjustment == 0:
+        return ""
+
+    direction = "more" if adjustment > 0 else "less"
+    return (
+        f"Your history suggests ~{format_capacity_duration(abs(adjustment))} "
+        f"{direction} for this plan."
     )
-
-    if plan.learned_task_count == 0:
-        # Nothing was learned for this plan, so the expected total is
-        # simply the user's own arithmetic. Saying so is clearer than
-        # repeating the same number as if it were a finding.
-        return "Based on your own estimates."
-
-    covered = (
-        f"{plan.learned_task_count} of {len(plan.tasks)} "
-        f"{activity_noun(len(plan.tasks))} use durations learned from "
-        "your history."
-    )
-
-    if plan.learned_adjustment_minutes > 0:
-        adjustment = (
-            f"; your history suggests about "
-            f"{format_minutes(plan.learned_adjustment_minutes)} more"
-        )
-    elif plan.learned_adjustment_minutes < 0:
-        adjustment = (
-            f"; your history suggests about "
-            f"{format_minutes(-plan.learned_adjustment_minutes)} less"
-        )
-    else:
-        adjustment = "; your history suggests about the same"
-
-    return f"{estimates_text}{adjustment}. {covered}"
 
 
 def build_fit_line(plan):
-    """State which activities fit, always naming the ordering used."""
+    """How the plan splits across the available time.
+
+    Deliberately conditional. With a single pending activity the split
+    restates the headline and is omitted. With several, a concise count
+    tells the user how much of the plan is comfortable - but the
+    ordering rule behind the split stays an internal detail of the
+    engine rather than card copy.
+    """
     if plan.available_minutes is None or not plan.tasks:
         return ""
-
-    if plan.state == STATE_OVER_CAPACITY:
-        return (
-            f"{plan.fitting_task_count} "
-            f"{activity_noun(plan.fitting_task_count)} fit; "
-            f"{plan.beyond_task_count} would go beyond, based on the "
-            "order they're listed."
-        )
 
     if plan.state == STATE_NEAR_CAPACITY:
         if plan.open_capacity_minutes == 0:
             return "That fills the time you have."
-        return f"About {format_minutes(plan.open_capacity_minutes)} spare."
+        return (
+            f"About {format_capacity_duration(plan.open_capacity_minutes)} "
+            "spare."
+        )
 
-    return ""
+    if plan.state != STATE_OVER_CAPACITY:
+        return ""
+
+    # One activity that does not fit is already fully described by the
+    # headline; a "0 fit; 1 goes beyond" line adds nothing.
+    if len(plan.tasks) < 2:
+        return ""
+
+    # Nothing fitting at all is likewise clear from the headline.
+    if plan.fitting_task_count == 0:
+        return ""
+
+    return (
+        f"{plan.fitting_task_count} "
+        f"{activity_noun(plan.fitting_task_count)} "
+        f"{'fits' if plan.fitting_task_count == 1 else 'fit'} within your "
+        f"available time; {plan.beyond_task_count} "
+        f"{'goes' if plan.beyond_task_count == 1 else 'go'} beyond."
+    )
 
 
 def build_completed_line(plan):
@@ -502,12 +546,18 @@ def build_completed_line(plan):
     return (
         f"{plan.completed_count} "
         f"{activity_noun(plan.completed_count)} already complete "
-        f"({format_minutes(plan.completed_minutes)})."
+        f"({format_capacity_duration(plan.completed_minutes)})."
     )
 
 
 def build_support_lines(plan):
-    """All supporting lines for the capacity card, in display order."""
+    """The supporting lines, in the card's information hierarchy.
+
+    KEY NUMBERS, then BRIEF EXPLANATION, then the conditional fit split,
+    then completed work. Every line is optional: a state that has
+    nothing useful to add simply produces fewer lines, which is what
+    keeps the card scannable.
+    """
     lines = (
         build_balance_line(plan),
         build_evidence_line(plan),
