@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
 )
 
 from Modules.activity import Activity
-from Modules.calibration_service import CalibrationService
 from Modules.date_utils import format_display_date
 from Modules.estimate_suggestion import suggest_estimate
 from UI.theme.design_system import (
@@ -126,35 +125,37 @@ class AddActivityDialog(QDialog):
                 self.activity.estimated_minutes
             )
 
-        # Smart Activity Estimates: one read-only calibration report is
-        # built when the dialog opens; recomputing a suggestion afterwards
-        # is pure arithmetic on that report. The report never changes the
-        # database.
-        self.calibration_report = self.load_calibration_report()
+        # Smart Activity Estimates: the historical records are read once
+        # when the dialog opens; recomputing a suggestion afterwards is
+        # pure arithmetic on that snapshot. Nothing here ever writes to
+        # the database.
+        self.calibration_records = self.load_calibration_records()
 
         # Guard flag: True while the dialog itself is writing the spinbox
         # (accepting a suggestion). Programmatic changes must not be
-        # treated as a new user anchor, otherwise accepting 68 would
-        # immediately produce "suggests ~77" recommendation chaining.
+        # treated as a new user anchor, otherwise accepting 70 would
+        # immediately produce "suggests ~80" recommendation chaining.
         self._applying_suggestion = False
 
-        # The suggestion re-anchors whenever the USER edits the estimate
-        # or switches category.
+        # The suggestion re-anchors whenever the USER edits the estimate,
+        # switches category, or renames the activity (the name selects
+        # the exact-activity evidence tier).
         self.estimated_time.valueChanged.connect(self.refresh_suggestion)
         self.activity_type.currentTextChanged.connect(
             self.refresh_suggestion
         )
+        self.activity_name.textChanged.connect(self.refresh_suggestion)
 
         # Initial state: anchored to the prefilled estimate in edit mode,
         # or the default value in add mode.
         self.refresh_suggestion()
 
-    def load_calibration_report(self):
-        """Build the read-only calibration report, or None when the data
-        source cannot provide one. Opening the dialog must never fail just
-        because suggestion evidence is unavailable."""
+    def load_calibration_records(self):
+        """Read the historical plan-vs-actual records, or None when the
+        data source cannot provide them. Opening the dialog must never
+        fail just because suggestion evidence is unavailable."""
         try:
-            return CalibrationService(self.database).build_report()
+            return self.database.get_calibration_records()
         except Exception:
             return None
 
@@ -238,8 +239,9 @@ class AddActivityDialog(QDialog):
             return
 
         suggestion = suggest_estimate(
-            self.calibration_report,
+            self.calibration_records,
             self.activity_type.currentText(),
+            self.activity_name.text(),
             self.estimated_time.value(),
             self.estimated_time.minimum(),
             self.estimated_time.maximum(),
