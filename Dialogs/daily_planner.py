@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QMessageBox,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -250,7 +251,6 @@ class DailyPlanner(QWidget):
         layout.addWidget(self.distribution_result_label)
 
         action_row = QHBoxLayout()
-        action_row.addStretch()
         self.reset_allocations_button = self.button_factory.secondary(
             "Reset", "fa5s.undo"
         )
@@ -258,7 +258,19 @@ class DailyPlanner(QWidget):
         self.reset_allocations_button.clicked.connect(
             self.reset_temporary_allocations
         )
+        # Applying is the primary commit action, so it uses the shared
+        # primary variant against Reset's ghost treatment. Both appear
+        # only while an actual temporary override exists.
+        self.apply_allocations_button = self.button_factory.primary(
+            "Apply Changes", "fa5s.check"
+        )
+        self.apply_allocations_button.setCursor(Qt.PointingHandCursor)
+        self.apply_allocations_button.clicked.connect(
+            self.apply_temporary_allocations
+        )
         action_row.addWidget(self.reset_allocations_button)
+        action_row.addStretch()
+        action_row.addWidget(self.apply_allocations_button)
         layout.addLayout(action_row)
 
         self.time_distribution_section = section
@@ -383,7 +395,12 @@ class DailyPlanner(QWidget):
                 self.distribution_result_label.setText(
                     f"✓ Fits — {remaining} remaining"
                 )
-        self.reset_allocations_button.setVisible(bool(self.temporary_allocations))
+        # Both actions belong to a temporary scenario: with no override
+        # there is nothing to revert and nothing to commit.
+        has_overrides = bool(self.temporary_allocations)
+        self.reset_allocations_button.setVisible(has_overrides)
+        self.apply_allocations_button.setVisible(has_overrides)
+        self.apply_allocations_button.setEnabled(has_overrides)
 
     def change_temporary_allocation(self, activity_id, delta):
         """Change only the local what-if allocation for one pending task."""
@@ -405,6 +422,77 @@ class DailyPlanner(QWidget):
     def reset_temporary_allocations(self):
         self.temporary_allocations.clear()
         self.refresh_time_distribution()
+
+    def apply_temporary_allocations(self):
+        """Persist the temporary allocations as deliberate user estimates.
+
+        This is the one place the what-if scenario stops being hypothetical.
+        It is an explicit user decision to save a planning estimate - NOT a
+        Smart Estimate calculation - so it goes through the same
+        ``Database.update_activity`` path the Add Activity dialog uses and
+        adds no estimation logic of its own. The database owns what happens
+        to ``original_estimate_minutes``; that rule is not reinterpreted here.
+
+        Nothing else about the plan is touched: no reordering, no dates, no
+        available time, no adjustment of activities the user did not change.
+        """
+        if not self.temporary_allocations:
+            return
+
+        # Re-read the saved plan so a stale row can never be revived and a
+        # value is only ever written onto the activity it belongs to.
+        activities = {
+            activity.id: activity
+            for activity in self.database.get_activities_for_date(
+                self.selected_date
+            )
+            if activity.id is not None
+        }
+
+        pending_writes = []
+        for activity_id, minutes in self.temporary_allocations.items():
+            activity = activities.get(activity_id)
+            # Stale/unknown IDs are ignored, and a completed activity is
+            # never modified by this feature.
+            if activity is None or activity.completed:
+                continue
+            allocation = max(
+                ESTIMATE_MIN_MINUTES,
+                min(int(minutes), ESTIMATE_MAX_MINUTES),
+            )
+            # Only genuinely changed activities are rewritten.
+            if allocation == activity.estimated_minutes:
+                continue
+            pending_writes.append((activity, allocation))
+
+        applied = 0
+        try:
+            for activity, allocation in pending_writes:
+                activity.estimated_minutes = allocation
+                self.database.update_activity(activity)
+                applied += 1
+        except Exception:
+            # Persistence failed: keep the scenario so the user can retry,
+            # and never claim the changes were applied.
+            self.refresh_capacity()
+            QMessageBox.warning(
+                self,
+                "Apply Changes",
+                "Your allocations could not be saved. "
+                "The changes are still here, so you can try again.",
+            )
+            return
+
+        # Committed: the scenario is spent, so the planner returns to
+        # showing the saved state and CapacityService recalculates
+        # normally from persistence.
+        self.temporary_allocations.clear()
+        self._distribution_source_signature = None
+        self.preview_plan = None
+        self.load_activities()
+
+        if applied and self.app_controller is not None:
+            self.app_controller.notify_activity_data_changed()
 
     def refresh_capacity(self):
         """Recalculate and display the capacity picture.
