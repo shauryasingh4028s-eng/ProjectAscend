@@ -90,15 +90,15 @@ v1.4 also includes final visual polish across the application, including improve
 
 ### Tomorrow Planner
 
-![Tomorrow Planner](docs/screenshots/tomorrow-planner.png)
+![Tomorrow Planner](docs/screenshots/tomorrow_planner.png)
 
 ### Capacity Intelligence
 
-![Capacity Intelligence](docs/screenshots/capacity-intelligence.png)
+![Capacity Intelligence](docs/screenshots/capacity_intelligence.png)
 
 ### Time Distribution
 
-![Time Distribution](docs/screenshots/time-distribution-apply.png)
+![Time Distribution](docs/screenshots/time_distribution_apply.png)
 
 ### Insights
 
