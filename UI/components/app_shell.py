@@ -25,12 +25,11 @@ from PySide6.QtWidgets import (
 )
 
 from UI.theme.design_system import (
+    BrandAssets,
     Colors,
     IconFactory,
-    Radius,
     Spacing,
     ThemeManager,
-    Typography,
 )
 
 
@@ -50,23 +49,17 @@ class SidebarPlayerCard(QFrame):
         identity_layout.setSpacing(Spacing.SM)
 
         self.avatar_label = QLabel("PA")
+        self.avatar_label.setObjectName("SidebarPlayerAvatar")
         self.avatar_label.setAlignment(Qt.AlignCenter)
         self.avatar_label.setFixedSize(30, 30)
-        self.avatar_label.setStyleSheet(
-            f"background-color: {Colors.PRIMARY_SOFT};"
-            f"border: 1px solid {Colors.PRIMARY_MUTED};"
-            f"border-radius: {Radius.MD}px;"
-            f"color: {Colors.PRIMARY_HOVER};"
-            f"font-size: {Typography.LABEL}px; font-weight: 800;"
-        )
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(0)
+        # Styled by object name so the name follows the active theme's
+        # primary text colour instead of freezing the colour that was
+        # active when the card was built.
         self.name_label = QLabel("Ascender")
-        self.name_label.setStyleSheet(
-            f"color: {Colors.TEXT_PRIMARY};"
-            f"font-size: {Typography.SECONDARY}px; font-weight: 700;"
-        )
+        self.name_label.setObjectName("SidebarPlayerName")
         self.level_label = QLabel("Level 1")
         self.level_label.setObjectName("MutedText")
         text_layout.addWidget(self.name_label)
@@ -113,6 +106,7 @@ class Sidebar(QFrame):
         self.setFixedWidth(214)
 
         self.nav_buttons = {}
+        self.nav_icon_names = {}
         self.button_group = QButtonGroup(self)
         self.button_group.setExclusive(True)
         self.icon_factory = IconFactory(self)
@@ -154,21 +148,15 @@ class Sidebar(QFrame):
             project_root = Path(__file__).resolve().parents[2]
 
         logo_path = project_root / "Assets" / "logo_32.png"
-        pixmap = QPixmap(str(logo_path))
-        if not pixmap.isNull():
-            logo.setPixmap(
-                pixmap.scaled(
-                    26,
-                    26,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-            )
-        else:
+        self.logo_source = QPixmap(str(logo_path))
+        self.logo_label = logo
+        if self.logo_source.isNull():
             logo.setText("▲")
             logo.setStyleSheet(
                 f"color: {Colors.PRIMARY}; font-size: 15px; font-weight: 800;"
             )
+        else:
+            self.refresh_brand_mark()
 
         name = QLabel("ASCEND")
         name.setObjectName("BrandMark")
@@ -177,6 +165,21 @@ class Sidebar(QFrame):
         layout.addWidget(name)
         layout.addStretch()
         return container
+
+    def refresh_brand_mark(self):
+        """Re-ink the brand mark for the active theme (same size/placement)."""
+        source = getattr(self, "logo_source", None)
+        if source is None or source.isNull():
+            return
+
+        self.logo_label.setPixmap(
+            BrandAssets.themed_logo(source).scaled(
+                26,
+                26,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
 
     def add_section_label(self, text):
         label = QLabel(text.upper())
@@ -197,12 +200,28 @@ class Sidebar(QFrame):
         self.button_group.addButton(button)
         self.nav_layout.addWidget(button)
         self.nav_buttons[key] = button
+        self.nav_icon_names[button] = icon_name
         return button
 
     def set_active(self, key):
         button = self.nav_buttons.get(key)
         if button is not None and not button.isChecked():
             button.setChecked(True)
+
+    def refresh_theme(self):
+        """Re-render the sidebar's painted assets for the active theme.
+
+        Stylesheet-driven colours follow the theme automatically; the brand
+        pixmap and the navigation icons are painted once at build time, so
+        they are re-inked here when the theme changes.
+        """
+        self.refresh_brand_mark()
+        for button in self.nav_buttons.values():
+            icon_name = self.nav_icon_names.get(button)
+            if icon_name is not None:
+                button.setIcon(
+                    self.icon_factory.get(icon_name, Colors.TEXT_SECONDARY)
+                )
 
 
 class PageHeader(QFrame):
