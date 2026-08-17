@@ -796,3 +796,350 @@ class TestInteractiveTimeDistribution:
             assert planner.distribution_result_label.text()
         finally:
             ThemeManager.set_theme(original)
+
+
+class TestApplyChanges:
+    """Committing a temporary allocation scenario to persistence.
+
+    Apply Changes is the point where a hypothetical allocation becomes a
+    deliberate, saved planning estimate. These tests protect that it uses
+    the established activity-update path, writes only what the user
+    actually changed, and leaves available time and Smart Estimate
+    behaviour alone.
+    """
+
+    def set_available(self, planner, minutes):
+        planner.available_time_input.setValue(minutes)
+        planner.set_available_time_button.click()
+
+    def estimates(self, database, planner):
+        return {
+            activity.name: activity.estimated_minutes
+            for activity in database.get_activities_for_date(
+                planner.selected_date
+            )
+        }
+
+    def test_apply_is_unavailable_without_temporary_changes(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+
+        assert planner.apply_allocations_button.isHidden()
+        assert planner.reset_allocations_button.isHidden()
+
+    def test_changing_an_allocation_makes_apply_available(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        planner.allocation_rows[activity_id][0].click()
+
+        assert not planner.apply_allocations_button.isHidden()
+        assert planner.apply_allocations_button.isEnabled()
+
+    def test_apply_persists_the_changed_estimate(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        planner.allocation_rows[activity_id][0].click()
+        planner.allocation_rows[activity_id][0].click()
+        planner.apply_allocations_button.click()
+
+        assert self.estimates(database, planner) == {"Maths": 50}
+
+    def test_apply_persists_every_changed_activity_only(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        add_activity(database, planner, "Science", 90)
+        add_activity(database, planner, "Coding", 45, activity_type="Coding")
+        planner.load_activities()
+        saved = database.get_activities_for_date(planner.selected_date)
+        maths, science, coding = saved
+        coding_row_before = [
+            row for row in activity_rows(database) if row[0] == coding.id
+        ]
+
+        for _ in range(2):
+            planner.allocation_rows[maths.id][0].click()
+        for _ in range(4):
+            planner.allocation_rows[science.id][0].click()
+        planner.apply_allocations_button.click()
+
+        assert self.estimates(database, planner) == {
+            "Maths": 50,
+            "Science": 70,
+            "Coding": 45,
+        }
+        # The untouched activity is not rewritten at all.
+        assert [
+            row for row in activity_rows(database) if row[0] == coding.id
+        ] == coding_row_before
+
+    def test_apply_clears_the_temporary_scenario_and_actions(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        planner.allocation_rows[activity_id][0].click()
+        planner.apply_allocations_button.click()
+
+        assert planner.temporary_allocations == {}
+        assert planner.apply_allocations_button.isHidden()
+        assert planner.reset_allocations_button.isHidden()
+
+    def test_apply_refreshes_the_planner_without_a_restart(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 100)
+        planner.load_activities()
+        self.set_available(planner, 60)
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        for _ in range(8):
+            planner.allocation_rows[activity_id][0].click()
+        planner.apply_allocations_button.click()
+
+        # Same live widget: the saved value is now the displayed value and
+        # the normal capacity plan reflects it.
+        assert planner.allocation_rows[activity_id][1].text() == "60 min"
+        assert planner.capacity_plan.expected_workload_minutes == 60
+        assert "fills your available time" in (
+            planner.distribution_result_label.text()
+        )
+        assert "1h 0m planned" in planner.summary_label.text()
+
+    def test_reset_after_apply_does_not_restore_the_previous_value(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        for _ in range(2):
+            planner.allocation_rows[activity_id][0].click()
+        planner.apply_allocations_button.click()
+        planner.reset_temporary_allocations()
+
+        assert planner.allocation_rows[activity_id][1].text() == "50 min"
+        assert self.estimates(database, planner) == {"Maths": 50}
+
+    def test_apply_leaves_available_time_untouched(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        self.set_available(planner, 60)
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        for _ in range(2):
+            planner.allocation_rows[activity_id][0].click()
+        planner.apply_allocations_button.click()
+
+        assert planner.capacity_service.get_available_minutes(
+            planner.selected_date
+        ) == 60
+        assert planner.capacity_plan.available_minutes == 60
+
+    def test_apply_never_modifies_a_completed_activity(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        add_activity(database, planner, "Done", 60, completed=True, actual=60)
+        planner.load_activities()
+        saved = database.get_activities_for_date(planner.selected_date)
+        pending, done = saved
+        done_row_before = [
+            row for row in activity_rows(database) if row[0] == done.id
+        ]
+
+        planner.allocation_rows[pending.id][0].click()
+        # A completed activity has no row, so force the value in to prove
+        # the write path itself refuses it.
+        planner.temporary_allocations[done.id] = 5
+        planner.apply_allocations_button.click()
+
+        assert [
+            row for row in activity_rows(database) if row[0] == done.id
+        ] == done_row_before
+
+    def test_apply_ignores_stale_activity_ids_safely(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        planner.allocation_rows[activity_id][0].click()
+        planner.temporary_allocations[98765] = 45
+        planner.apply_allocations_button.click()
+
+        assert self.estimates(database, planner) == {"Maths": 55}
+        assert planner.temporary_allocations == {}
+
+    def test_failed_persistence_preserves_the_temporary_scenario(
+        self, planner_factory, database, monkeypatch
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+        planner.allocation_rows[activity_id][0].click()
+
+        def explode(activity):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(database, "update_activity", explode)
+        warned = []
+        monkeypatch.setattr(
+            "Dialogs.daily_planner.QMessageBox.warning",
+            lambda *args, **kwargs: warned.append(args),
+        )
+
+        planner.apply_allocations_button.click()
+
+        assert planner.temporary_allocations == {activity_id: 55}
+        assert not planner.apply_allocations_button.isHidden()
+        assert self.estimates(database, planner) == {"Maths": 60}
+        assert warned
+
+    def test_apply_does_not_feed_temporary_values_into_smart_estimate(
+        self, planner_factory, database, monkeypatch
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        import Modules.capacity_service as capacity_service
+
+        seen = []
+        real = capacity_service.suggest_estimate
+
+        def record(records, activity_type, name, estimate, *args, **kwargs):
+            seen.append(estimate)
+            return real(records, activity_type, name, estimate, *args, **kwargs)
+
+        monkeypatch.setattr(capacity_service, "suggest_estimate", record)
+
+        # While the allocation is hypothetical, Smart Estimate is only ever
+        # consulted with the persisted 60 - the preview value 55 is applied
+        # after the estimate is calculated and never becomes an input.
+        planner.allocation_rows[activity_id][0].click()
+        assert seen
+        assert set(seen) == {60}
+
+        # After Apply, 55 is the user's saved estimate, so it is legitimate
+        # input on subsequent reads. Apply itself adds no estimation call.
+        seen.clear()
+        planner.apply_allocations_button.click()
+        assert set(seen) == {55}
+        assert self.estimates(database, planner) == {"Maths": 55}
+
+    def test_capacity_service_is_unchanged_without_overrides(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        add_activity(database, planner, "Science", 90)
+        planner.load_activities()
+        self.set_available(planner, 200)
+        before = planner.capacity_service.build_plan(planner.selected_date)
+
+        assert planner.temporary_allocations == {}
+        assert before == planner.capacity_service.build_plan(
+            planner.selected_date, allocation_overrides={}
+        )
+        assert before == planner.capacity_service.build_plan(
+            planner.selected_date, allocation_overrides=None
+        )
+
+    def test_apply_preserves_original_estimate_semantics(
+        self, planner_factory, database
+    ):
+        """The database owns original_estimate_minutes; Apply does not
+        reinterpret it. Before any recorded work, an edit is still
+        planning, so the original follows - exactly as an Add Activity
+        edit behaves."""
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(
+            planner.selected_date
+        )[0].id
+
+        for _ in range(2):
+            planner.allocation_rows[activity_id][0].click()
+        planner.apply_allocations_button.click()
+
+        database.cursor.execute(
+            "SELECT estimated_minutes, original_estimate_minutes "
+            "FROM activities WHERE id = ?",
+            (activity_id,),
+        )
+        assert database.cursor.fetchone() == (50, 50)
+
+    @pytest.mark.parametrize("theme", ["dark", "light"])
+    def test_apply_action_constructs_in_both_themes(
+        self, planner_factory, database, theme
+    ):
+        from UI.theme.design_system import ThemeManager
+        original = ThemeManager.current_theme
+        try:
+            ThemeManager.set_theme(theme)
+            planner = planner_factory(database)
+            add_activity(database, planner, "Maths", 60)
+            planner.load_activities()
+            activity_id = database.get_activities_for_date(
+                planner.selected_date
+            )[0].id
+            planner.allocation_rows[activity_id][0].click()
+            # The primary commit action against Reset's ghost treatment,
+            # both from the existing button factory.
+            assert planner.apply_allocations_button.objectName() == (
+                "PrimaryButton"
+            )
+            assert planner.reset_allocations_button.objectName() == (
+                "GhostButton"
+            )
+            planner.apply_allocations_button.click()
+            assert planner.temporary_allocations == {}
+        finally:
+            ThemeManager.set_theme(original)
