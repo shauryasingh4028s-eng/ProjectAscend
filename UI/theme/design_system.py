@@ -8,7 +8,7 @@ Nothing in this module performs business logic, database access or analytics.
 """
 
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QPushButton, QStyle
 
 try:
@@ -111,6 +111,51 @@ class IconFactory:
                 pass
 
         return self.widget.style().standardIcon(QStyle.SP_ArrowRight)
+
+
+class BrandAssets:
+    """Theme-aware treatment of the shipped ASCEND brand mark.
+
+    The logo asset is authored for dark surfaces: its structural strokes are
+    near-white, so on the light sidebar they disappear and only the coloured
+    accent stroke survives. Instead of shipping a second asset or hardcoding
+    one colour that would break the other theme, the same asset is re-inked
+    from the active palette: neutral strokes take the theme's primary text
+    colour and the coloured accent is deepened just enough to hold contrast.
+    Shape, proportions and placement are untouched, and the dark theme keeps
+    the asset exactly as authored.
+    """
+
+    # QColor saturation (0-255) below which a pixel is a neutral stroke.
+    NEUTRAL_SATURATION = 100
+    # How much the coloured accent is deepened on light surfaces.
+    ACCENT_VALUE_SCALE = 0.72
+
+    @staticmethod
+    def themed_logo(pixmap):
+        """Return the brand mark inked for the active theme."""
+        if pixmap.isNull() or ThemeManager.current_theme != "light":
+            return pixmap
+
+        image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+        ink = QColor(Colors.TEXT_PRIMARY)
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = image.pixelColor(x, y)
+                alpha = color.alpha()
+                if alpha == 0:
+                    continue
+                if color.saturation() < BrandAssets.NEUTRAL_SATURATION:
+                    color.setRgb(ink.red(), ink.green(), ink.blue(), alpha)
+                else:
+                    color.setHsv(
+                        color.hue(),
+                        color.saturation(),
+                        int(color.value() * BrandAssets.ACCENT_VALUE_SCALE),
+                        alpha,
+                    )
+                image.setPixelColor(x, y, color)
+        return QPixmap.fromImage(image)
 
 
 class ButtonFactory:
@@ -236,6 +281,14 @@ class ThemeManager:
     @staticmethod
     def app_stylesheet():
         """Return the complete Project Ascend stylesheet."""
+        # Light-theme sidebar labels carry more weight: on the ambient light
+        # canvas the secondary text tone reads as washed out, so navigation
+        # uses the palette's primary text colour and a medium weight. The
+        # dark sidebar keeps its accepted secondary-tone treatment exactly.
+        is_light = ThemeManager.current_theme == "light"
+        nav_item_color = Colors.TEXT_PRIMARY if is_light else Colors.TEXT_SECONDARY
+        nav_item_weight = 650 if is_light else 600
+
         return f"""
             QWidget {{
                 background-color: {Colors.BACKGROUND};
@@ -279,9 +332,9 @@ class ThemeManager:
                 background-color: transparent;
                 border: 1px solid transparent;
                 border-radius: {Radius.MD}px;
-                color: {Colors.TEXT_SECONDARY};
+                color: {nav_item_color};
                 font-size: {Typography.BODY}px;
-                font-weight: 600;
+                font-weight: {nav_item_weight};
                 padding: 9px 12px;
                 text-align: left;
             }}
@@ -302,6 +355,23 @@ class ThemeManager:
                 background-color: {Colors.SURFACE_SECONDARY};
                 border: 1px solid {Colors.BORDER};
                 border-radius: {Radius.LG}px;
+            }}
+
+            /* The player name follows the theme's primary text colour:
+               near-black on the light card, near-white on the dark one. */
+            QLabel#SidebarPlayerName {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
+            }}
+
+            QLabel#SidebarPlayerAvatar {{
+                background-color: {Colors.PRIMARY_SOFT};
+                border: 1px solid {Colors.PRIMARY_MUTED};
+                border-radius: {Radius.MD}px;
+                color: {Colors.PRIMARY_HOVER};
+                font-size: {Typography.LABEL}px;
+                font-weight: 800;
             }}
 
             QFrame#PageHeader {{

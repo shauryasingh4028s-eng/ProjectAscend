@@ -160,6 +160,7 @@ class AppController:
             app.setStyleSheet(ThemeManager.app_stylesheet())
         # Reapply the shared stylesheet to pages that own a local stylesheet.
         self.shell.setStyleSheet(ThemeManager.app_stylesheet())
+        self.shell.sidebar.refresh_theme()
         self.dashboard.setStyleSheet(ThemeManager.dashboard_stylesheet())
         self.dashboard.refresh_semantic_icons()
         self.analytics_window.setStyleSheet(ThemeManager.app_stylesheet())
