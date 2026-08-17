@@ -3,7 +3,7 @@
 ; Non-commercial use only
 
 #define MyAppName "Project Ascend"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "Shaurya Singh"
 #define MyAppExeName "ProjectAscend.exe"
 
@@ -30,8 +30,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
-OutputBaseFilename=ProjectAscendSetup_v1.0.0
-SetupIconFile=C:\Users\umesh kumar\OneDrive\Desktop\Project Ascend\Assets\app.ico
+OutputBaseFilename=ProjectAscendSetup_v1.4.0
+SetupIconFile=C:\Users\umesh kumar\OneDrive\Desktop\ProjectAscend_v1.4\Project Ascend\Assets\app.ico
 SolidCompression=yes
 WizardStyle=modern dynamic
 
@@ -42,8 +42,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "C:\Users\umesh kumar\OneDrive\Desktop\Project Ascend\dist\ProjectAscend\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "C:\Users\umesh kumar\OneDrive\Desktop\Project Ascend\dist\ProjectAscend\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "C:\Users\umesh kumar\OneDrive\Desktop\ProjectAscend_v1.4\Project Ascend\dist\ProjectAscend\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "C:\Users\umesh kumar\OneDrive\Desktop\ProjectAscend_v1.4\Project Ascend\dist\ProjectAscend\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
