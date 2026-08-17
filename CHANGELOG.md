@@ -6,6 +6,7 @@
 Status: 🔄 In progress
 
 ### Added
+- Interactive Time Distribution: a temporary Tomorrow Planner what-if tool for adjusting per-activity allocations and seeing the immediate available-time fit. Allocations seed from existing Smart Expected Durations, never modify saved activities, and disappear when the app closes.
 - Smart Activity Estimates: when adding or editing an activity, Ascend
   can suggest a more realistic duration learned from the user's own
   history ("Ascend suggests ~70 min", "You typically take ~10 min

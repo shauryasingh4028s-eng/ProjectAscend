@@ -89,7 +89,8 @@ class TestFreshPlanner:
             for index in range(layout.count())
         ]
         assert widgets[1] is planner.capacity_card
-        assert len(widgets) == 3
+        assert widgets[2] is planner.time_distribution_section
+        assert len(widgets) == 4
 
     def test_empty_planner_says_nothing_is_planned(
         self, planner_factory, database
@@ -694,3 +695,104 @@ class TestThemes:
         assert planner.clear_available_time_button.objectName() == (
             "GhostButton"
         )
+
+
+class TestInteractiveTimeDistribution:
+    def set_available(self, planner, minutes):
+        planner.available_time_input.setValue(minutes)
+        planner.set_available_time_button.click()
+
+    def test_section_appears_for_pending_tasks_and_seeds_expected_values(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        for _ in range(5):
+            database.add_activity(Activity(None, "2026-08-01", "Coding", "Project", 60, True, 70))
+        add_activity(database, planner, "Project", 60, activity_type="Coding")
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(planner.selected_date)[0].id
+        assert not planner.time_distribution_section.isHidden()
+        assert planner.allocation_rows[activity_id][1].text() == "70 min"
+        assert planner.temporary_allocations == {}
+
+    def test_no_allocation_controls_for_empty_or_completed_only_planner(
+        self, planner_factory, database
+    ):
+        planner = planner_factory(database)
+        assert planner.time_distribution_section.isHidden()
+        add_activity(database, planner, "Done", 60, completed=True, actual=60)
+        planner.load_activities()
+        assert planner.time_distribution_section.isHidden()
+
+    def test_minus_plus_update_preview_without_writing_activity(self, planner_factory, database):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity = database.get_activities_for_date(planner.selected_date)[0]
+        before = activity_rows(database)
+        minus, label, plus = planner.allocation_rows[activity.id]
+        minus.click()
+
+        minus, label, plus = planner.allocation_rows[activity.id]
+        assert label.text() == "55 min"
+        assert planner.temporary_allocations == {activity.id: 55}
+
+        plus.click()
+
+        minus, label, plus = planner.allocation_rows[activity.id]
+        assert label.text() == "60 min"
+        assert planner.temporary_allocations == {}
+        assert activity_rows(database) == before
+
+    def test_preview_updates_immediately_and_reset_restores_seeds(self, planner_factory, database):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 100)
+        add_activity(database, planner, "Coding", 100, activity_type="Coding")
+        planner.load_activities()
+        self.set_available(planner, 180)
+        assert "20m over your available time" in planner.distribution_result_label.text()
+        coding = database.get_activities_for_date(planner.selected_date)[1]
+        for _ in range(8):
+            planner.allocation_rows[coding.id][0].click()
+        assert planner.preview_plan.expected_workload_minutes == 160
+        assert planner.distribution_result_label.text() == "✓ Fits — 20m remaining"
+        assert not planner.reset_allocations_button.isHidden()
+        planner.reset_allocations_button.click()
+        assert planner.preview_plan.expected_workload_minutes == 200
+        assert planner.allocation_rows[coding.id][1].text() == "100 min"
+        assert planner.reset_allocations_button.isHidden()
+
+    def test_available_time_change_preserves_preview_allocations(self, planner_factory, database):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 100)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(planner.selected_date)[0].id
+        planner.allocation_rows[activity_id][2].click()
+        self.set_available(planner, 105)
+        assert planner.temporary_allocations == {activity_id: 105}
+        assert "fills your available time" in planner.distribution_result_label.text()
+
+    def test_reload_after_persisted_activity_change_clears_scenario(self, planner_factory, database):
+        planner = planner_factory(database)
+        add_activity(database, planner, "Maths", 60)
+        planner.load_activities()
+        activity_id = database.get_activities_for_date(planner.selected_date)[0].id
+        planner.allocation_rows[activity_id][2].click()
+        assert planner.temporary_allocations
+        add_activity(database, planner, "Science", 45)
+        planner.load_activities()
+        assert planner.temporary_allocations == {}
+
+    @pytest.mark.parametrize("theme", ["dark", "light"])
+    def test_distribution_constructs_in_both_themes(self, planner_factory, database, theme):
+        from UI.theme.design_system import ThemeManager
+        original = ThemeManager.current_theme
+        try:
+            ThemeManager.set_theme(theme)
+            planner = planner_factory(database)
+            add_activity(database, planner, "Maths", 60)
+            planner.load_activities()
+            assert not planner.time_distribution_section.isHidden()
+            assert planner.distribution_result_label.text()
+        finally:
+            ThemeManager.set_theme(original)
