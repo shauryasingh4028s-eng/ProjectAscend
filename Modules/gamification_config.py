@@ -89,8 +89,8 @@ class CharacterDefinition:
     accent: str
 
 
-# Eight original Ascend archetypes. These definitions drive vector artwork
-# drawn by Qt; no third-party or franchise assets are used.
+# Eight original Ascend archetypes. These definitions map to bundled original
+# sprite assets; no third-party or franchise assets are used.
 CHARACTERS = (
     CharacterDefinition("trailfinder", "Trailfinder", "explorer", "#D89A56", "#3B82F6"),
     CharacterDefinition("lumen", "Lumen", "mage", "#7C5CFF", "#60A5FA"),

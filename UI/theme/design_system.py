@@ -401,26 +401,42 @@ class ThemeManager:
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.ACCENT_MUTED};
                 border-radius: {Radius.LG}px;
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 {Colors.ACCENT_SOFT},
-                    stop: 0.32 {Colors.SURFACE},
-                    stop: 1 {Colors.SURFACE}
-                );
+            }}
+
+            QFrame#CharacterVisualPane {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: none;
+                border-right: 1px solid {Colors.ACCENT_MUTED};
+                border-top-left-radius: {Radius.LG}px;
+                border-bottom-left-radius: {Radius.LG}px;
             }}
 
             QFrame#AchievementCard,
-            QFrame#MilestoneRow,
-            QFrame#RankCard {{
+            QFrame#MilestoneCard,
+            QFrame#HeroStat {{
                 background-color: {Colors.SURFACE_SECONDARY};
                 border: 1px solid {Colors.BORDER};
                 border-radius: {Radius.MD}px;
             }}
 
-            QFrame#AchievementCard[unlocked="true"],
-            QFrame#RankCard[active="true"] {{
-                background-color: {Colors.ACCENT_SOFT};
-                border: 1px solid {Colors.ACCENT_MUTED};
+            QFrame#AchievementCard[unlocked="true"] {{
+                background-color: {Colors.SUCCESS_SOFT};
+                border: 1px solid {Colors.SUCCESS};
+            }}
+
+            QFrame#HeroStat[tint="blue"] {{
+                background-color: {Colors.PRIMARY_SOFT};
+                border: 1px solid {Colors.PRIMARY_MUTED};
+            }}
+
+            QFrame#HeroStat[tint="green"] {{
+                background-color: {Colors.SUCCESS_SOFT};
+                border: 1px solid {Colors.SUCCESS};
+            }}
+
+            QFrame#HeroStat[tint="amber"] {{
+                background-color: {Colors.WARNING_SOFT};
+                border: 1px solid {Colors.WARNING};
             }}
 
             QFrame#StatTile,
@@ -522,29 +538,66 @@ class ThemeManager:
                 font-weight: 800;
             }}
 
+            QLabel#ProgressEyebrow,
+            QLabel#HeroStatTitle {{
+                color: {Colors.TEXT_MUTED};
+                font-size: 9px;
+                font-weight: 750;
+                letter-spacing: 1px;
+            }}
+
             QLabel#PlayerRank {{
                 color: {Colors.ACCENT};
-                font-size: {Typography.LABEL}px;
+                font-size: 21px;
                 font-weight: 800;
-                letter-spacing: 1px;
             }}
 
             QLabel#ProgressLevel {{
                 color: {Colors.TEXT_PRIMARY};
-                font-size: 24px;
+                font-size: 28px;
                 font-weight: 800;
             }}
 
+            QLabel#PlayerXpStrong {{
+                color: {Colors.TEXT_SECONDARY};
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
+            }}
+
+            QLabel#HeroStatValue {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 17px;
+                font-weight: 800;
+            }}
+
+            QLabel#HeroStatValue[tone="blue"] {{ color: {Colors.PRIMARY}; }}
+            QLabel#HeroStatValue[tone="green"] {{ color: {Colors.SUCCESS}; }}
+            QLabel#HeroStatValue[tone="amber"] {{ color: {Colors.WARNING}; }}
+
             QLabel#CharacterName,
-            QLabel#AchievementName {{
+            QLabel#AchievementName,
+            QLabel#MilestoneName {{
                 color: {Colors.TEXT_PRIMARY};
                 font-size: {Typography.BODY}px;
                 font-weight: 750;
             }}
 
+            QLabel#CharacterStage,
+            QLabel#MilestoneDescription,
+            QLabel#AchievementDescription {{
+                color: {Colors.TEXT_MUTED};
+                font-size: {Typography.LABEL}px;
+            }}
+
             QLabel#AchievementStatus {{
                 color: {Colors.ACCENT};
                 font-size: {Typography.LABEL}px;
+                font-weight: 700;
+            }}
+
+            QLabel#AchievementCategory {{
+                color: {Colors.TEXT_MUTED};
+                font-size: 9px;
                 font-weight: 700;
             }}
 
@@ -558,15 +611,21 @@ class ThemeManager:
             }}
 
             QLabel#AchievementSymbol[unlocked="true"] {{
-                background-color: {Colors.ACCENT_SOFT};
-                border: 1px solid {Colors.ACCENT_MUTED};
-                color: {Colors.ACCENT};
+                background-color: {Colors.SUCCESS_SOFT};
+                border: 1px solid {Colors.SUCCESS};
+                color: {Colors.SUCCESS};
             }}
 
             QLabel#MilestoneTier {{
                 color: {Colors.SUCCESS};
-                font-size: {Typography.LABEL}px;
+                font-size: 9px;
                 font-weight: 750;
+            }}
+
+            QLabel#MilestoneProgress {{
+                color: {Colors.ACCENT};
+                font-size: 9px;
+                font-weight: 700;
             }}
 
             QLabel#PlayerXp,
@@ -822,26 +881,48 @@ class ThemeManager:
                 font-weight: 700;
             }}
 
-            QPushButton#CharacterChoice {{
+            QPushButton#SectionLinkButton {{
+                background-color: transparent;
+                border: none;
+                color: {Colors.ACCENT};
+                padding: 4px 6px;
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
+            }}
+
+            QPushButton#SectionLinkButton:hover {{
+                background-color: {Colors.ACCENT_SOFT};
+                color: {Colors.ACCENT_HOVER};
+            }}
+
+            QPushButton#CharacterChangeButton {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                color: {Colors.TEXT_SECONDARY};
+                padding: 6px 12px;
+                font-size: {Typography.SECONDARY}px;
+            }}
+
+            QToolButton#CharacterChoice {{
                 background-color: {Colors.SURFACE_SECONDARY};
                 border: 1px solid {Colors.BORDER};
                 border-radius: {Radius.MD}px;
                 color: {Colors.TEXT_SECONDARY};
-                padding: 7px 10px;
-                text-align: left;
+                padding: 7px;
+                font-size: {Typography.SECONDARY}px;
+                font-weight: 700;
             }}
 
-            QPushButton#CharacterChoice:hover {{
+            QToolButton#CharacterChoice:hover {{
                 background-color: {Colors.SURFACE_HOVER};
                 border: 1px solid {Colors.ACCENT_MUTED};
                 color: {Colors.TEXT_PRIMARY};
             }}
 
-            QPushButton#CharacterChoice:checked {{
+            QToolButton#CharacterChoice:checked {{
                 background-color: {Colors.ACCENT_SOFT};
-                border: 1px solid {Colors.ACCENT};
+                border: 2px solid {Colors.ACCENT};
                 color: {Colors.TEXT_PRIMARY};
-                font-weight: 750;
             }}
 
             QFrame#CelebrationCard {{

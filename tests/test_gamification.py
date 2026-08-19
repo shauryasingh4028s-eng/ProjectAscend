@@ -1,6 +1,8 @@
 """Project Ascend v1.5 gamification: real data, persistence and UI safety."""
 
 from datetime import date, timedelta
+import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -279,6 +281,17 @@ class TestStreaksAndCharacters:
         assert evolution_stage_for_level(20).identifier == "stage_4"
         assert evolution_stage_for_level(35).identifier == "stage_5"
 
+    def test_every_character_has_five_distinct_bundled_sprite_stages(self):
+        asset_root = Path(__file__).resolve().parents[1] / "Assets" / "characters"
+        for character in CHARACTERS:
+            hashes = []
+            for stage in range(1, 6):
+                path = asset_root / character.identifier / f"stage_{stage}.png"
+                assert path.exists()
+                assert path.stat().st_size > 20_000
+                hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
+            assert len(set(hashes)) == 5
+
 
 class TestGamificationUI:
     def test_player_progress_renders_empty_and_populated_in_both_themes(
@@ -294,8 +307,25 @@ class TestGamificationUI:
         )
         page = PlayerProgressPage(service, characters)
         assert page.level_title.text() == "Level 1"
+        assert page.rank_label.text() == "Starting Out"
         assert page.stat_cards["focus_time"].value_label.text() == "0m"
         assert page.character_sprite.character_id == CHARACTERS[0].identifier
+        assert len(page.achievement_cards) == 4
+        assert page.featured_achievement_ids == (
+            "first_activity", "first_focus", "first_daily_goal", "focus_10_hours"
+        )
+        assert not hasattr(page, "rank_cards")
+        assert set(page.milestone_rows) == {
+            "focus", "completion", "consistency", "goal_days", "progression"
+        }
+        page.resize(900, 700)
+        page.show()
+        qapp.processEvents()
+        assert page.compact_layout is True
+        assert page.milestones_grid.getItemPosition(3)[0] == 1
+        page.resize(1200, 800)
+        qapp.processEvents()
+        assert page.compact_layout is False
 
         activity = add_completed(database, date.today().isoformat(), minutes=75)
         service.process_activity_completion(activity.id, activity.date)
@@ -310,6 +340,20 @@ class TestGamificationUI:
             page.show()
             qapp.processEvents()
             assert not page.character_buttons[CHARACTERS[0].identifier].icon().isNull()
+
+        # Character cards use the real bundled stage and selection persists.
+        page.character_buttons[CHARACTERS[1].identifier].click()
+        assert characters.get_selected_id() == CHARACTERS[1].identifier
+        assert page.character_sprite.character_id == CHARACTERS[1].identifier
+
+        # The overview remains curated while the secondary catalogue exposes all.
+        page.view_all_achievements_button.click()
+        qapp.processEvents()
+        assert page.achievements_dialog is not None
+        assert page.achievements_dialog.isVisible()
+        assert len(page.achievements_dialog.cards) == len(ACHIEVEMENTS)
+        page.achievements_dialog.close()
+        qapp.processEvents()
         page.close()
 
     def test_celebration_overlay_rejects_duplicate_events(self, qapp):

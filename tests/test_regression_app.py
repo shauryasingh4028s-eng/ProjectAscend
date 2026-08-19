@@ -454,11 +454,12 @@ class TestInsightsV13:
         )
         assert dashboard.player_card.best_streak_row.property("tint") == "blue"
 
-        # Player progression stat cards.
+        # Player Progress hero statistics retain their semantic identities.
         stat_cards = controller.player_progress_page.stat_cards
         assert stat_cards["current_streak"].property("tint") == "amber"
-        assert stat_cards["goal_days"].property("tint") == "green"
-        assert stat_cards["completion"].property("tint") == "purple"
+        assert stat_cards["focus_time"].property("tint") == "blue"
+        assert stat_cards["completed_activities"].property("tint") == "green"
+        assert stat_cards["completion"].property("tint") == "green"
 
         # Tints are theme-aware tokens, present in both palettes.
         ThemeManager.set_theme("light")
