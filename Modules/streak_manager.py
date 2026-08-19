@@ -1,15 +1,22 @@
 from datetime import date, timedelta
 
 
+BEST_STREAK_SETTING = "best_streak"
+
+
 class StreakManager:
     def __init__(self, database):
-        # Store the database so streak data can be loaded from daily history.
+        # Daily history remains the authoritative streak-day source.
         self.database = database
 
     def get_current_streak(self):
-        # Return the active streak ending today, or yesterday if today is not done.
-        history = self.get_history_by_date()
+        """Return the active streak ending today or yesterday.
 
+        A day only enters the streak when persisted daily history says its
+        daily productivity goal was reached. Productive work below the goal is
+        retained in statistics but does not create a streak day.
+        """
+        history = self.get_history_by_date()
         today = date.today()
         yesterday = today - timedelta(days=1)
 
@@ -22,98 +29,81 @@ class StreakManager:
 
         streak = 0
         current_date = start_date
-
         while self.is_goal_completed(history, current_date):
             streak += 1
             current_date -= timedelta(days=1)
-
         return streak
 
-    def get_longest_streak(self):
-        # Return the longest consecutive goal-completed streak in history.
+    def _calculated_longest_streak(self):
         history = self.get_history_by_date()
-
-        if not history:
+        completed_dates = sorted(
+            activity_date
+            for activity_date, completed in history.items()
+            if completed
+        )
+        if not completed_dates:
             return 0
 
-        completed_dates = sorted(history.keys())
-        longest_streak = 0
-        current_streak = 0
-        previous_date = None
-
-        for activity_date in completed_dates:
-            if not history[activity_date]:
-                current_streak = 0
-                previous_date = activity_date
-                continue
-
-            if previous_date is None:
-                current_streak = 1
-            elif activity_date == previous_date + timedelta(days=1):
-                current_streak += 1
+        longest = 1
+        running = 1
+        previous = completed_dates[0]
+        for activity_date in completed_dates[1:]:
+            if activity_date == previous + timedelta(days=1):
+                running += 1
             else:
-                current_streak = 1
+                running = 1
+            longest = max(longest, running)
+            previous = activity_date
+        return longest
 
-            if current_streak > longest_streak:
-                longest_streak = current_streak
+    def _saved_best_streak(self):
+        raw_value = self.database.get_setting(BEST_STREAK_SETTING)
+        try:
+            return max(0, int(raw_value))
+        except (TypeError, ValueError):
+            return 0
 
-            previous_date = activity_date
-
-        return longest_streak
+    def get_longest_streak(self):
+        """Return and permanently retain the user's best streak."""
+        calculated = self._calculated_longest_streak()
+        saved = self._saved_best_streak()
+        best = max(calculated, saved)
+        if best > saved:
+            self.database.set_setting(BEST_STREAK_SETTING, best)
+        return best
 
     def get_total_goal_days(self):
-        # Return how many history days reached the daily goal.
-        history_rows = self.database.get_daily_history()
-        total_goal_days = 0
-
-        for row in history_rows:
-            if self.get_goal_completed_from_row(row):
-                total_goal_days += 1
-
-        return total_goal_days
+        return sum(
+            1
+            for row in self.database.get_daily_history()
+            if self.get_goal_completed_from_row(row)
+        )
 
     def get_completion_rate(self):
-        # Return the percentage of history days where the goal was achieved.
         history_rows = self.database.get_daily_history()
-
         if not history_rows:
             return 0
-
-        total_goal_days = self.get_total_goal_days()
-        completion_rate = (total_goal_days / len(history_rows)) * 100
-
-        return round(completion_rate, 1)
+        return round((self.get_total_goal_days() / len(history_rows)) * 100, 1)
 
     def get_history_by_date(self):
-        # Convert database rows into a date-to-goal-completed dictionary.
-        history_rows = self.database.get_daily_history()
         history = {}
-
-        for row in history_rows:
+        for row in self.database.get_daily_history():
             activity_date = self.get_date_from_row(row)
-
-            if activity_date is None:
-                continue
-
-            history[activity_date] = self.get_goal_completed_from_row(row)
-
+            if activity_date is not None:
+                history[activity_date] = self.get_goal_completed_from_row(row)
         return history
 
     def get_date_from_row(self, row):
-        # Extract and convert the date value from a daily history row.
         try:
-            date_text = row[1]
-            return date.fromisoformat(date_text)
+            return date.fromisoformat(row[1])
         except (IndexError, TypeError, ValueError):
             return None
 
     def get_goal_completed_from_row(self, row):
-        # Extract goal_completed from a daily history row.
         try:
             return bool(row[5])
         except (IndexError, TypeError):
             return False
 
     def is_goal_completed(self, history, activity_date):
-        # Check whether the goal was completed on a specific date.
         return history.get(activity_date, False)

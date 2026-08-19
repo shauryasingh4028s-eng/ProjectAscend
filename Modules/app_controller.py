@@ -2,6 +2,15 @@ from Modules.analytics import AnalyticsWindow
 from Modules.capacity_service import CapacityService
 from Modules.insights_service import InsightsService
 from Modules.achievement_manager import AchievementManager
+from Modules.character_manager import CharacterManager
+from Modules.gamification_config import (
+    DAILY_GOAL_XP,
+    XP_PER_LEVEL,
+    rank_for_level,
+    xp_into_level,
+)
+from Modules.milestone_manager import MilestoneManager
+from Modules.progression_service import ProgressionService
 from Modules.xp_manager import XPManager
 from Modules.streak_manager import StreakManager
 from Database.database import Database
@@ -14,9 +23,7 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from UI.theme.design_system import ThemeManager
 from UI.components.app_shell import AppShell
-
-# XP required to advance one level, matching XPManager.get_level().
-XP_PER_LEVEL = 100
+from UI.components.celebrations import Celebration
 
 
 class AppController:
@@ -42,6 +49,23 @@ class AppController:
             self.streak_manager,
             self.xp_manager,
         )
+        self.milestone_manager = MilestoneManager(
+            self.database,
+            self.streak_manager,
+            self.xp_manager,
+        )
+        self.character_manager = CharacterManager(self.database)
+        self.progression_service = ProgressionService(
+            self.database,
+            self.xp_manager,
+            self.streak_manager,
+            self.achievement_manager,
+            self.milestone_manager,
+            self.character_manager,
+        )
+        # Existing real data earns its durable v1.5 recognition on first run.
+        # The timestamp records observation now; no historical date is guessed.
+        self.progression_service.reconcile_existing_progress()
 
         # Planned workload against the user's own stated available time.
         # Read-only over activities; the only value it ever writes is the
@@ -62,8 +86,8 @@ class AppController:
         self.history_window = HistoryWindow(self.database)
         self.analytics_window = AnalyticsWindow(self.insights_service)
         self.player_progress_page = PlayerProgressPage(
-            self.xp_manager,
-            self.streak_manager,
+            self.progression_service,
+            self.character_manager,
         )
         self.settings_page = SettingsPage(self.database)
         self.settings_page.daily_goal_changed.connect(
@@ -127,10 +151,10 @@ class AppController:
         """Push already-calculated XP values into the sidebar summary."""
         total_xp = self.xp_manager.get_total_xp()
         level = self.xp_manager.get_level()
-        xp_into_level = total_xp % XP_PER_LEVEL
+        xp_into_level_value = xp_into_level(total_xp)
         self.shell.sidebar.player_card.set_progress(
             level,
-            xp_into_level,
+            xp_into_level_value,
             XP_PER_LEVEL,
             total_xp,
         )
@@ -147,6 +171,7 @@ class AppController:
             self.history_window.load_history()
         elif page_key == "progress":
             self.player_progress_page.refresh()
+            self.player_progress_page.animate_open()
 
         self.refresh_sidebar_progress()
 
@@ -166,6 +191,7 @@ class AppController:
         self.analytics_window.setStyleSheet(ThemeManager.app_stylesheet())
         self.history_window.setStyleSheet(ThemeManager.app_stylesheet())
         self.player_progress_page.setStyleSheet(ThemeManager.app_stylesheet())
+        self.player_progress_page.refresh()
         self.settings_page.setStyleSheet(ThemeManager.app_stylesheet())
         self.tomorrow_planner.setStyleSheet(ThemeManager.app_stylesheet())
 
@@ -207,6 +233,100 @@ class AppController:
             self.player_progress_page.refresh()
         elif current_page == "history":
             self.history_window.load_history()
+
+    def handle_progression_update(self, update):
+        """Translate meaningful persisted changes into restrained rewards."""
+        if update is None or not update.has_celebration:
+            return
+
+        celebrations = []
+        selected_character_id = self.character_manager.get_selected_id()
+        if update.leveled_up:
+            rank = rank_for_level(update.level_after)
+            title = "Level Up"
+            if update.character_evolved:
+                title = "Level Up · Character Evolved"
+            celebrations.append(
+                Celebration(
+                    event_id=f"level:{update.level_after}:{update.xp_after}",
+                    title=title,
+                    message=(
+                        f"Level {update.level_after} · {rank.name}. "
+                        f"+{update.xp_earned} XP from completed work."
+                    ),
+                    tier=3,
+                    symbol="↑",
+                    character_id=selected_character_id,
+                    stage_identifier=update.stage_after,
+                    previous_stage_identifier=(
+                        update.stage_before if update.character_evolved else None
+                    ),
+                )
+            )
+
+        if update.daily_goal_xp_awarded:
+            history = self.database.get_history_for_date(update.activity_date)
+            focused_minutes = history[2] if history is not None else 0
+            celebrations.append(
+                Celebration(
+                    event_id=f"daily-goal:{update.activity_date}",
+                    title="Today's Goal Complete",
+                    message=(
+                        f"{focused_minutes:,} minutes focused today. "
+                        f"+{DAILY_GOAL_XP} XP."
+                    ),
+                    tier=2,
+                    symbol="✓",
+                    character_id=selected_character_id,
+                    stage_identifier=update.stage_after,
+                )
+            )
+
+        if update.achievements:
+            if len(update.achievements) == 1:
+                achievement = update.achievements[0]
+                title = "Achievement Unlocked"
+                message = f"{achievement.name} · {achievement.description}"
+                event_id = f"achievement:{achievement.identifier}"
+            else:
+                title = f"{len(update.achievements)} Achievements Unlocked"
+                message = " · ".join(
+                    achievement.name for achievement in update.achievements[:3]
+                )
+                event_id = "achievements:" + ":".join(
+                    achievement.identifier for achievement in update.achievements
+                )
+            celebrations.append(
+                Celebration(
+                    event_id=event_id,
+                    title=title,
+                    message=message,
+                    tier=2,
+                    symbol="+",
+                )
+            )
+
+        if update.milestones and len(celebrations) < 3:
+            latest = update.milestones[-1]
+            celebrations.append(
+                Celebration(
+                    event_id="milestones:" + ":".join(
+                        milestone.identifier for milestone in update.milestones
+                    ),
+                    title="Milestone Reached",
+                    message=(
+                        f"{latest.track.name} reached Tier {latest.tier}. "
+                        "Your long-term progress has been recorded."
+                    ),
+                    tier=2,
+                    symbol="◆",
+                )
+            )
+
+        # Cap one productivity action at three short notices. All earned items
+        # remain visible in Player Progress even when grouped here.
+        for celebration in celebrations[:3]:
+            self.shell.show_celebration(celebration)
 
     def close_database(self):
         # Close the shared SQLite connection when the app exits.

@@ -397,6 +397,32 @@ class ThemeManager:
                 border-radius: {Radius.LG}px;
             }}
 
+            QFrame#ProgressHeroCard {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                border-radius: {Radius.LG}px;
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 {Colors.ACCENT_SOFT},
+                    stop: 0.32 {Colors.SURFACE},
+                    stop: 1 {Colors.SURFACE}
+                );
+            }}
+
+            QFrame#AchievementCard,
+            QFrame#MilestoneRow,
+            QFrame#RankCard {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.MD}px;
+            }}
+
+            QFrame#AchievementCard[unlocked="true"],
+            QFrame#RankCard[active="true"] {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT_MUTED};
+            }}
+
             QFrame#StatTile,
             QFrame#CompactStatRow,
             QFrame#ActivityCard,
@@ -494,6 +520,53 @@ class ThemeManager:
                 color: {Colors.ACCENT};
                 font-size: 20px;
                 font-weight: 800;
+            }}
+
+            QLabel#PlayerRank {{
+                color: {Colors.ACCENT};
+                font-size: {Typography.LABEL}px;
+                font-weight: 800;
+                letter-spacing: 1px;
+            }}
+
+            QLabel#ProgressLevel {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 24px;
+                font-weight: 800;
+            }}
+
+            QLabel#CharacterName,
+            QLabel#AchievementName {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: {Typography.BODY}px;
+                font-weight: 750;
+            }}
+
+            QLabel#AchievementStatus {{
+                color: {Colors.ACCENT};
+                font-size: {Typography.LABEL}px;
+                font-weight: 700;
+            }}
+
+            QLabel#AchievementSymbol {{
+                background-color: {Colors.SURFACE_ELEVATED};
+                border: 1px solid {Colors.BORDER_STRONG};
+                border-radius: {Radius.MD}px;
+                color: {Colors.TEXT_MUTED};
+                font-size: {Typography.LABEL}px;
+                font-weight: 800;
+            }}
+
+            QLabel#AchievementSymbol[unlocked="true"] {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                color: {Colors.ACCENT};
+            }}
+
+            QLabel#MilestoneTier {{
+                color: {Colors.SUCCESS};
+                font-size: {Typography.LABEL}px;
+                font-weight: 750;
             }}
 
             QLabel#PlayerXp,
@@ -749,6 +822,59 @@ class ThemeManager:
                 font-weight: 700;
             }}
 
+            QPushButton#CharacterChoice {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.MD}px;
+                color: {Colors.TEXT_SECONDARY};
+                padding: 7px 10px;
+                text-align: left;
+            }}
+
+            QPushButton#CharacterChoice:hover {{
+                background-color: {Colors.SURFACE_HOVER};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+
+            QPushButton#CharacterChoice:checked {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT};
+                color: {Colors.TEXT_PRIMARY};
+                font-weight: 750;
+            }}
+
+            QFrame#CelebrationCard {{
+                background-color: {Colors.SURFACE_ELEVATED};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                border-radius: {Radius.LG}px;
+            }}
+
+            QFrame#CelebrationCard[tier="3"] {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT};
+            }}
+
+            QLabel#CelebrationSymbol {{
+                background-color: {Colors.ACCENT_SOFT};
+                border: 1px solid {Colors.ACCENT_MUTED};
+                border-radius: {Radius.MD}px;
+                color: {Colors.ACCENT};
+                font-size: 16px;
+                font-weight: 800;
+            }}
+
+            QLabel#CelebrationTitle {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 15px;
+                font-weight: 800;
+            }}
+
+            QLabel#CelebrationMessage {{
+                color: {Colors.TEXT_SECONDARY};
+                font-size: {Typography.SECONDARY}px;
+            }}
+
             /* ---------- Progress ---------- */
 
             QProgressBar {{
@@ -768,6 +894,10 @@ class ThemeManager:
 
             QProgressBar#XpBar::chunk {{
                 background-color: {Colors.ACCENT};
+            }}
+
+            QProgressBar#MilestoneBar::chunk {{
+                background-color: {Colors.SUCCESS};
             }}
 
             /* ---------- Inputs, lists and containers ---------- */

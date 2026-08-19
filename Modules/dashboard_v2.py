@@ -18,6 +18,7 @@ from Dialogs.add_activity_dialog import AddActivityDialog
 from Modules.focus_mode import FocusMode
 from Modules.session import SessionEngine
 from Modules.date_utils import format_duration
+from Modules.gamification_config import XP_PER_LEVEL, xp_into_level
 from Modules.streak_manager import StreakManager
 from UI.components.dashboard_widgets import (
     ActionBar,
@@ -301,7 +302,7 @@ class DashboardV2(QWidget):
         self.current_xp_label.setText(f"{current_xp} XP")
         self.current_streak_label.setText(f"{current_streak} days")
         self.best_streak_label.setText(f"{best_streak} days")
-        self.animate_xp_bar(min(current_xp % 100, 100))
+        self.animate_xp_bar(min(xp_into_level(current_xp), XP_PER_LEVEL))
 
     def get_xp_summary(self):
         if XPManager is None:
@@ -532,7 +533,20 @@ class DashboardV2(QWidget):
         self.current_activity_label.setText(f"Completed: {activity.name}. Excellent work.")
         self.reset_session_buttons()
 
-        if self.app_controller is not None:
+        progression_update = None
+        if self.app_controller is not None and hasattr(
+            self.app_controller,
+            "progression_service",
+        ):
+            progression_update = (
+                self.app_controller.progression_service.process_activity_completion(
+                    activity.id,
+                    activity.date,
+                )
+            )
+            self.app_controller.notify_activity_data_changed()
+            self.app_controller.handle_progression_update(progression_update)
+        elif self.app_controller is not None:
             self.app_controller.xp_manager.award_activity_completion(activity.id)
             self.app_controller.notify_activity_data_changed()
         elif XPManager is not None:
@@ -540,7 +554,12 @@ class DashboardV2(QWidget):
 
         self.load_today_activities()
 
-        if self.all_today_activities_complete():
+        # Preserve the existing all-activities-complete acknowledgement when
+        # no stronger progression reward already recognizes this action.
+        if self.all_today_activities_complete() and not (
+            progression_update is not None
+            and progression_update.has_celebration
+        ):
             QMessageBox.information(
                 self,
                 "Congratulations!",

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from UI.components.celebrations import CelebrationOverlay
 from UI.theme.design_system import (
     BrandAssets,
     Colors,
@@ -304,6 +305,19 @@ class AppShell(QWidget):
 
         root_layout.addWidget(self.sidebar)
         root_layout.addWidget(canvas, 1)
+
+        # A single non-blocking surface handles only meaningful progression
+        # celebrations. Ordinary navigation and task actions remain static.
+        self.celebration_overlay = CelebrationOverlay(self)
+        self.celebration_overlay.setGeometry(self.rect())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "celebration_overlay"):
+            self.celebration_overlay.setGeometry(self.rect())
+
+    def show_celebration(self, celebration):
+        return self.celebration_overlay.enqueue(celebration)
 
     def add_section_label(self, text):
         self.sidebar.add_section_label(text)

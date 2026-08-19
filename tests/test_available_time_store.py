@@ -287,7 +287,8 @@ class TestDatabaseSafety:
 
         database.cursor.execute("PRAGMA user_version")
         assert database.cursor.fetchone()[0] == SCHEMA_VERSION
-        assert SCHEMA_VERSION == 2
+        # Capacity still performs no migration; v1.5 progression owns v3.
+        assert SCHEMA_VERSION == 3
 
     def test_no_new_tables_are_created(self, store, database, plan_date):
         database.cursor.execute(

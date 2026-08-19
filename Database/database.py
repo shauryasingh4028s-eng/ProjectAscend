@@ -1,6 +1,6 @@
 from pathlib import Path
 from Modules.activity import Activity
-from datetime import date
+from datetime import date, datetime, timezone
 import sqlite3
 import os
 
@@ -16,7 +16,10 @@ import os
 #         planning estimate after the editable estimate is changed.
 #       * focus_sessions.actual_seconds keeps the precise elapsed execution
 #         seconds while the existing minute-level fields stay unchanged.
-SCHEMA_VERSION = 2
+# v3  - v1.5 Gamification Foundation:
+#       * xp_events.event_key gives every new XP award a stable, one-time key.
+#       * achievement_unlocks and milestone_unlocks persist earned progress.
+SCHEMA_VERSION = 3
 
 
 def _has_column(cursor, table, column):
@@ -56,9 +59,45 @@ def _migrate_to_v2(cursor):
         )
 
 
+def _migrate_to_v3(cursor):
+    """Add durable, idempotent v1.5 progression state.
+
+    Historical XP remains untouched. Existing activity-completion events gain
+    deterministic keys from facts already stored in the database; no event
+    time or reward is invented during migration.
+    """
+    if not _has_column(cursor, "xp_events", "event_key"):
+        cursor.execute("ALTER TABLE xp_events ADD COLUMN event_key TEXT")
+
+    cursor.execute("""
+        UPDATE xp_events
+        SET event_key = 'activity:' || activity_id || ':' || event_type
+        WHERE event_key IS NULL
+          AND activity_id IS NOT NULL
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_xp_events_event_key
+        ON xp_events(event_key)
+        WHERE event_key IS NOT NULL
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS achievement_unlocks (
+            achievement_id TEXT PRIMARY KEY,
+            unlocked_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS milestone_unlocks (
+            milestone_id TEXT PRIMARY KEY,
+            unlocked_at TEXT NOT NULL
+        )
+    """)
+
+
 # Ordered schema migrations: target version -> migration callable.
 MIGRATIONS = {
     2: _migrate_to_v2,
+    3: _migrate_to_v3,
 }
 
 
@@ -130,6 +169,7 @@ class Database:
                 earned_date TEXT NOT NULL,
                 amount INTEGER NOT NULL,
                 event_type TEXT NOT NULL,
+                event_key TEXT,
                 UNIQUE(activity_id, event_type)
             )
         """)
@@ -151,6 +191,22 @@ class Database:
                 completed_activities INTEGER NOT NULL DEFAULT 0,
                 total_activities INTEGER NOT NULL DEFAULT 0,
                 goal_completed INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        # Earned achievements and milestone tiers are one-time facts. Their
+        # timestamps record when this build observed the unlock; migrations do
+        # not fabricate historical event dates.
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS achievement_unlocks (
+                achievement_id TEXT PRIMARY KEY,
+                unlocked_at TEXT NOT NULL
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS milestone_unlocks (
+                milestone_id TEXT PRIMARY KEY,
+                unlocked_at TEXT NOT NULL
             )
         """)
 
@@ -233,18 +289,38 @@ class Database:
         # Every activity marked xp_awarded received the established 10 XP
         # completion reward. Existing installations predate xp_events, so
         # record those known rewards for Insights without modifying total XP.
-        self.cursor.execute("""
-            INSERT OR IGNORE INTO xp_events (
-                activity_id,
-                earned_date,
-                amount,
-                event_type
-            )
-            SELECT id, date, 10, 'activity_completion'
-            FROM activities
-            WHERE completed = 1
-              AND xp_awarded = 1
-        """)
+        if _has_column(self.cursor, "xp_events", "event_key"):
+            self.cursor.execute("""
+                INSERT OR IGNORE INTO xp_events (
+                    activity_id,
+                    earned_date,
+                    amount,
+                    event_type,
+                    event_key
+                )
+                SELECT
+                    id,
+                    date,
+                    10,
+                    'activity_completion',
+                    'activity:' || id || ':activity_completion'
+                FROM activities
+                WHERE completed = 1
+                  AND xp_awarded = 1
+            """)
+        else:
+            self.cursor.execute("""
+                INSERT OR IGNORE INTO xp_events (
+                    activity_id,
+                    earned_date,
+                    amount,
+                    event_type
+                )
+                SELECT id, date, 10, 'activity_completion'
+                FROM activities
+                WHERE completed = 1
+                  AND xp_awarded = 1
+            """)
 
     def add_activity(self, activity):
         # Save one Activity object permanently into SQLite.
@@ -454,8 +530,21 @@ class Database:
         minutes = max(30, min(int(minutes), 1440))
         self.set_setting("daily_goal", minutes)
 
-    def award_activity_completion_xp(self, activity_id, amount):
-        # Award completion XP only once for a completed activity.
+    def award_activity_completion_xp_result(self, activity_id, amount):
+        """Award the established completion reward exactly once.
+
+        Returns ``(total_xp, awarded)``. Both the activity guard and the
+        stable XP event key must be new before total XP changes.
+        """
+        self.cursor.execute("""
+            SELECT date
+            FROM activities
+            WHERE id = ? AND completed = 1 AND xp_awarded = 0
+        """, (activity_id,))
+        activity_row = self.cursor.fetchone()
+        if activity_row is None:
+            return self.get_total_xp_setting(), False
+
         self.cursor.execute("""
             UPDATE activities
             SET xp_awarded = 1
@@ -463,31 +552,107 @@ class Database:
               AND completed = 1
               AND xp_awarded = 0
         """, (activity_id,))
-
         if self.cursor.rowcount != 1:
             self.connection.commit()
-            return self.get_total_xp_setting()
+            return self.get_total_xp_setting(), False
+
+        event_key = f"activity:{int(activity_id)}:activity_completion"
+        self.cursor.execute("""
+            INSERT OR IGNORE INTO xp_events (
+                activity_id,
+                earned_date,
+                amount,
+                event_type,
+                event_key
+            )
+            VALUES (?, ?, ?, 'activity_completion', ?)
+        """, (
+            activity_id,
+            activity_row[0],
+            max(0, int(amount)),
+            event_key,
+        ))
+        if self.cursor.rowcount != 1:
+            # An event already proves this reward was applied. Keep the
+            # activity guard synchronized without adding XP a second time.
+            self.connection.commit()
+            return self.get_total_xp_setting(), False
+
+        total_xp = self.get_total_xp_setting() + max(0, int(amount))
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO settings (key, value)
+            VALUES ('total_xp', ?)
+        """, (str(total_xp),))
+        self.connection.commit()
+        return total_xp, True
+
+    def award_activity_completion_xp(self, activity_id, amount):
+        # Compatibility API retained for v1.4 callers and tests.
+        total_xp, _awarded = self.award_activity_completion_xp_result(
+            activity_id,
+            amount,
+        )
+        return total_xp
+
+    def award_daily_goal_xp(self, activity_date, amount):
+        """Award daily-goal XP only when persisted history proves success."""
+        activity_date = str(activity_date)
+        self.cursor.execute("""
+            SELECT goal_completed
+            FROM daily_history
+            WHERE date = ?
+        """, (activity_date,))
+        row = self.cursor.fetchone()
+        if row is None or not bool(row[0]):
+            return self.get_total_xp_setting(), False
+
+        return self.award_xp_event(
+            event_key=f"daily_goal:{activity_date}",
+            event_type="daily_goal",
+            amount=amount,
+            earned_date=activity_date,
+        )
+
+    def award_xp_event(
+        self,
+        event_key,
+        event_type,
+        amount,
+        earned_date,
+        activity_id=None,
+    ):
+        """Atomically persist one keyed, evidence-backed XP event."""
+        amount = max(0, int(amount))
+        if not event_key or amount == 0:
+            return self.get_total_xp_setting(), False
+
+        self.cursor.execute("""
+            INSERT OR IGNORE INTO xp_events (
+                activity_id,
+                earned_date,
+                amount,
+                event_type,
+                event_key
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            activity_id,
+            str(earned_date),
+            amount,
+            str(event_type),
+            str(event_key),
+        ))
+        if self.cursor.rowcount != 1:
+            self.connection.commit()
+            return self.get_total_xp_setting(), False
 
         total_xp = self.get_total_xp_setting() + amount
         self.cursor.execute("""
             INSERT OR REPLACE INTO settings (key, value)
             VALUES ('total_xp', ?)
         """, (str(total_xp),))
-        self.cursor.execute("""
-            INSERT INTO xp_events (
-                activity_id,
-                earned_date,
-                amount,
-                event_type
-            )
-            VALUES (?, ?, ?, 'activity_completion')
-        """, (
-            activity_id,
-            date.today().isoformat(),
-            amount,
-        ))
         self.connection.commit()
-        return total_xp
+        return total_xp, True
 
     def get_total_xp_setting(self):
         # Read the saved XP total without creating or resetting a setting.
@@ -497,6 +662,127 @@ class Database:
             return 0
 
         return int(value)
+
+    def get_progress_metrics(self):
+        """Return authoritative all-time facts used by v1.5 progression.
+
+        Completed activity ``actual_minutes`` remains the canonical all-time
+        focus total so existing history is preserved. A meaningful focus
+        session requires at least one persisted minute (or 60 precise seconds).
+        """
+        self.cursor.execute("""
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(actual_minutes), 0)
+            FROM activities
+            WHERE completed = 1
+        """)
+        activity_row = self.cursor.fetchone() or (0, 0)
+
+        self.cursor.execute("""
+            SELECT COUNT(*)
+            FROM focus_sessions
+            WHERE COALESCE(actual_seconds, actual_minutes * 60, 0) >= 60
+        """)
+        session_row = self.cursor.fetchone()
+
+        self.cursor.execute("""
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN goal_completed = 1 THEN 1 ELSE 0 END), 0)
+            FROM daily_history
+        """)
+        history_row = self.cursor.fetchone() or (0, 0)
+
+        total_days = max(0, int(history_row[0] or 0))
+        goal_days = max(0, int(history_row[1] or 0))
+        completion_rate = (
+            round((goal_days / total_days) * 100, 1) if total_days else 0.0
+        )
+
+        return {
+            "completed_activities": max(0, int(activity_row[0] or 0)),
+            "focus_minutes": max(0, int(activity_row[1] or 0)),
+            "focus_sessions": max(0, int((session_row or (0,))[0] or 0)),
+            "goal_days": goal_days,
+            "recorded_days": total_days,
+            "goal_completion_rate": completion_rate,
+        }
+
+    @staticmethod
+    def _unlock_timestamp():
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def unlock_achievement(self, achievement_id, unlocked_at=None):
+        """Persist an achievement once and report whether it was new."""
+        self.cursor.execute("""
+            INSERT OR IGNORE INTO achievement_unlocks (
+                achievement_id,
+                unlocked_at
+            )
+            VALUES (?, ?)
+        """, (
+            str(achievement_id),
+            unlocked_at or self._unlock_timestamp(),
+        ))
+        unlocked = self.cursor.rowcount == 1
+        self.connection.commit()
+        return unlocked
+
+    def get_achievement_unlocks(self):
+        self.cursor.execute("""
+            SELECT achievement_id, unlocked_at
+            FROM achievement_unlocks
+            ORDER BY unlocked_at, achievement_id
+        """)
+        return {row[0]: row[1] for row in self.cursor.fetchall()}
+
+    def unlock_milestone(self, milestone_id, unlocked_at=None):
+        """Persist a milestone tier once and report whether it was new."""
+        self.cursor.execute("""
+            INSERT OR IGNORE INTO milestone_unlocks (
+                milestone_id,
+                unlocked_at
+            )
+            VALUES (?, ?)
+        """, (
+            str(milestone_id),
+            unlocked_at or self._unlock_timestamp(),
+        ))
+        unlocked = self.cursor.rowcount == 1
+        self.connection.commit()
+        return unlocked
+
+    def get_milestone_unlocks(self):
+        self.cursor.execute("""
+            SELECT milestone_id, unlocked_at
+            FROM milestone_unlocks
+            ORDER BY unlocked_at, milestone_id
+        """)
+        return {row[0]: row[1] for row in self.cursor.fetchall()}
+
+    def get_xp_events(self):
+        """Return persisted XP awards for integrity and restart verification."""
+        self.cursor.execute("""
+            SELECT
+                activity_id,
+                earned_date,
+                amount,
+                event_type,
+                event_key
+            FROM xp_events
+            ORDER BY id
+        """)
+        return [
+            {
+                "activity_id": row[0],
+                "earned_date": row[1],
+                "amount": row[2],
+                "event_type": row[3],
+                "event_key": row[4],
+            }
+            for row in self.cursor.fetchall()
+        ]
 
     def record_focus_session(
         self,
