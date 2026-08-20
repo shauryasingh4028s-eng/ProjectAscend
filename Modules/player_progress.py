@@ -353,6 +353,56 @@ class MilestoneCard(QFrame):
             )
 
 
+class AchievementProgressWidget(QWidget):
+    """Restrained five-segment indicator for one real achievement criterion."""
+
+    SEGMENTS = 5
+
+    def __init__(self):
+        super().__init__()
+        self.progress_ratio = 0.0
+        self.earned = False
+        self.setFixedHeight(8)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def set_progress(self, current_value, threshold, earned=False):
+        self.earned = bool(earned)
+        self.progress_ratio = 1.0 if self.earned else min(
+            1.0,
+            max(0.0, float(current_value) / max(1, threshold)),
+        )
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        gap = 3
+        segment_width = max(
+            1.0,
+            (self.width() - gap * (self.SEGMENTS - 1)) / self.SEGMENTS,
+        )
+        fill_units = self.progress_ratio * self.SEGMENTS
+        active_color = QColor(Colors.SUCCESS if self.earned else Colors.ACCENT)
+        background = QColor(Colors.SURFACE_ELEVATED)
+        border = QColor(Colors.BORDER_STRONG)
+
+        for index in range(self.SEGMENTS):
+            x = index * (segment_width + gap)
+            rect = QRectF(x, 1, segment_width, 6)
+            painter.setPen(QPen(border, 1))
+            painter.setBrush(background)
+            painter.drawRoundedRect(rect, 3, 3)
+
+            amount = min(1.0, max(0.0, fill_units - index))
+            if amount <= 0:
+                continue
+            fill_rect = QRectF(x, 1, segment_width * amount, 6)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(active_color)
+            painter.drawRoundedRect(fill_rect, 3, 3)
+        painter.end()
+
+
 class AchievementCard(QFrame):
     """Compact recognition card shared by featured and catalogue views."""
 
@@ -362,7 +412,7 @@ class AchievementCard(QFrame):
         self.featured = featured
         self.setObjectName("AchievementCard")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(142 if featured else 116)
+        self.setMinimumHeight(150 if featured else 126)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.MD, Spacing.MD, Spacing.MD, Spacing.MD)
@@ -389,11 +439,13 @@ class AchievementCard(QFrame):
         self.status_label.setObjectName("AchievementStatus")
         self.status_label.setWordWrap(True)
         self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.progress_widget = AchievementProgressWidget()
 
         layout.addLayout(top)
         layout.addWidget(self.name_label)
         layout.addWidget(self.description_label)
         layout.addStretch()
+        layout.addWidget(self.progress_widget)
         layout.addWidget(self.status_label)
 
     @staticmethod
@@ -411,8 +463,14 @@ class AchievementCard(QFrame):
         self.setProperty("unlocked", value)
         self.symbol_label.setProperty("unlocked", value)
         self.category_label.setText(
-            "Earned" if state.unlocked else state.definition.category
+            "Earned  ✓" if state.unlocked else state.definition.category
         )
+        self.progress_widget.set_progress(
+            state.current_value,
+            state.definition.threshold,
+            state.unlocked,
+        )
+        self.status_label.setProperty("unlocked", value)
         self.status_label.setText(
             _format_unlock_date(state.unlocked_at)
             if state.unlocked
@@ -420,6 +478,7 @@ class AchievementCard(QFrame):
         )
         _repolish(self)
         _repolish(self.symbol_label)
+        _repolish(self.status_label)
 
 
 class AchievementsDialog(QDialog):

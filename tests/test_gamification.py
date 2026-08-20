@@ -281,16 +281,62 @@ class TestStreaksAndCharacters:
         assert evolution_stage_for_level(20).identifier == "stage_4"
         assert evolution_stage_for_level(35).identifier == "stage_5"
 
-    def test_every_character_has_five_distinct_bundled_sprite_stages(self):
+    def test_every_character_has_five_distinct_transparent_sprite_stages(
+        self,
+        qapp,
+    ):
+        from PySide6.QtGui import QImage
+
         asset_root = Path(__file__).resolve().parents[1] / "Assets" / "characters"
         for character in CHARACTERS:
             hashes = []
+            images = []
             for stage in range(1, 6):
                 path = asset_root / character.identifier / f"stage_{stage}.png"
                 assert path.exists()
                 assert path.stat().st_size > 20_000
                 hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
+                image = QImage(str(path)).convertToFormat(QImage.Format_ARGB32)
+                assert not image.isNull()
+                assert image.size().width() == 320
+                assert image.size().height() == 320
+                assert image.hasAlphaChannel()
+
+                visible = 0
+                transparent = 0
+                for y in range(image.height()):
+                    for x in range(image.width()):
+                        color = image.pixelColor(x, y)
+                        assert color.alpha() in (0, 255)
+                        if color.alpha() == 0:
+                            transparent += 1
+                            # No checker/white preview RGB is hidden beneath alpha.
+                            assert (color.red(), color.green(), color.blue()) == (0, 0, 0)
+                        else:
+                            visible += 1
+                            assert x >= 4 and y >= 4
+                            assert x < image.width() - 4
+                            assert y < image.height() - 4
+                assert visible > 8_000
+                assert transparent > 30_000
+                images.append(image)
+
             assert len(set(hashes)) == 5
+            # Every consecutive stage is visibly developed, not a duplicate.
+            for previous, current in zip(images, images[1:]):
+                changed = 0
+                for y in range(current.height()):
+                    for x in range(current.width()):
+                        if previous.pixel(x, y) != current.pixel(x, y):
+                            changed += 1
+                assert changed > 750
+
+            stage_one_to_five = 0
+            for y in range(images[0].height()):
+                for x in range(images[0].width()):
+                    if images[0].pixel(x, y) != images[4].pixel(x, y):
+                        stage_one_to_five += 1
+            assert stage_one_to_five > 5_000
 
 
 class TestGamificationUI:
@@ -332,6 +378,14 @@ class TestGamificationUI:
         page.refresh()
         assert page.stat_cards["focus_time"].value_label.text() == "1h 15m"
         assert page.stat_cards["completed_activities"].value_label.text() == "1"
+        earned_card = page.achievement_cards["first_activity"]
+        assert earned_card.progress_widget.earned is True
+        assert earned_card.progress_widget.progress_ratio == 1.0
+        locked_card = next(
+            card for card in page.achievement_cards.values()
+            if not card.progress_widget.earned
+        )
+        assert 0.0 <= locked_card.progress_widget.progress_ratio < 1.0
 
         for theme in ("light", "dark"):
             ThemeManager.set_theme(theme)
@@ -352,6 +406,13 @@ class TestGamificationUI:
         assert page.achievements_dialog is not None
         assert page.achievements_dialog.isVisible()
         assert len(page.achievements_dialog.cards) == len(ACHIEVEMENTS)
+        assert all(
+            hasattr(card, "progress_widget")
+            for card in page.achievements_dialog.cards.values()
+        )
+        assert "✓" in page.achievements_dialog.cards[
+            "first_activity"
+        ].category_label.text()
         page.achievements_dialog.close()
         qapp.processEvents()
         page.close()

@@ -595,6 +595,10 @@ class ThemeManager:
                 font-weight: 700;
             }}
 
+            QLabel#AchievementStatus[unlocked="true"] {{
+                color: {Colors.SUCCESS};
+            }}
+
             QLabel#AchievementCategory {{
                 color: {Colors.TEXT_MUTED};
                 font-size: 9px;
