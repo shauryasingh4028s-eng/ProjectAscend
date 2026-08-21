@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from PySide6.QtCore import QPropertyAnimation, Qt
+from PySide6.QtCore import QPropertyAnimation, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
@@ -37,6 +37,12 @@ except ImportError:
 
 
 class DashboardV2(QWidget):
+    # Signals for telemetry (no data transmitted, only event notification)
+    task_created = Signal()
+    task_completed = Signal()
+    daily_goal_completed = Signal()
+    xp_changed = Signal()
+
     def __init__(self, database, app_controller=None):
         super().__init__()
 
@@ -48,6 +54,8 @@ class DashboardV2(QWidget):
         self.focus_mode = None
         self.progress_animation = None
         self.xp_animation = None
+        self._previous_xp_total = self.database.get_total_xp_setting()
+        self._previous_goal_completed = False
 
         self.icon_factory = IconFactory(self)
         self.button_factory = ButtonFactory(self.icon_factory)
@@ -278,6 +286,18 @@ class DashboardV2(QWidget):
         self.completed_total_label.setText(f"{completed_activities} / {total_activities}")
         self.remaining_minutes_label.setText(format_duration(remaining_minutes))
 
+        # Check if daily goal was just completed (emit signal only once per transition)
+        goal_is_completed = (study_minutes >= daily_goal and daily_goal > 0)
+        if goal_is_completed and not self._previous_goal_completed:
+            self.daily_goal_completed.emit()
+        self._previous_goal_completed = goal_is_completed
+
+        # Check if XP changed (emit signal only when total changes)
+        current_xp_total = self.database.get_total_xp_setting()
+        if current_xp_total != self._previous_xp_total:
+            self.xp_changed.emit()
+        self._previous_xp_total = current_xp_total
+
     def update_daily_goal_label(self):
         daily_goal = self.database.get_daily_goal()
         hours = daily_goal // 60
@@ -390,6 +410,7 @@ class DashboardV2(QWidget):
         if dialog.exec():
             self.load_today_activities()
             self.current_activity_label.setText("Current Activity: Today's task added")
+            self.task_created.emit()
 
     def open_settings_dialog(self):
         # Prefer the shell's Settings page so there is one place to edit
@@ -539,6 +560,7 @@ class DashboardV2(QWidget):
             XPManager(self.database).award_activity_completion(activity.id)
 
         self.load_today_activities()
+        self.task_completed.emit()
 
         if self.all_today_activities_complete():
             QMessageBox.information(

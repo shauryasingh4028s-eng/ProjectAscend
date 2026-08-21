@@ -4,6 +4,7 @@ from Modules.insights_service import InsightsService
 from Modules.achievement_manager import AchievementManager
 from Modules.xp_manager import XPManager
 from Modules.streak_manager import StreakManager
+from Modules.telemetry import AnalyticsClient
 from Database.database import Database
 from Dialogs.daily_planner import DailyPlanner
 from Modules.dashboard_v2 import Dashboard
@@ -14,6 +15,9 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from UI.theme.design_system import ThemeManager
 from UI.components.app_shell import AppShell
+
+# The current build version, used by telemetry to detect version changes.
+_APP_VERSION = "1.4.0"
 
 # XP required to advance one level, matching XPManager.get_level().
 XP_PER_LEVEL = 100
@@ -79,6 +83,18 @@ class AppController:
             self.app_settings.value("display_name", "Ascender", type=str)
         )
 
+        # ── Anonymous analytics (opt-in, consent-gated) ──
+        # Initialised last so all other components exist before any
+        # telemetry call. Every call is non-blocking; failures are
+        # silently swallowed so analytics never affect normal use.
+        self._init_telemetry()
+
+        # Expose the controller on the QApplication so the Settings page
+        # can find it when the analytics toggle changes.
+        app = QApplication.instance()
+        if app is not None:
+            app._ascend_controller = self
+
     def build_shell(self):
         """Register the existing screens as pages of the application shell."""
         self.shell.add_page(
@@ -141,8 +157,10 @@ class AppController:
             self.dashboard.load_today_activities()
         elif page_key == "planner":
             self.tomorrow_planner.load_activities()
+            self._track("planner_used")
         elif page_key == "insights":
             self.analytics_window.refresh()
+            self._track("insights_viewed")
         elif page_key == "history":
             self.history_window.load_history()
         elif page_key == "progress":
@@ -207,6 +225,70 @@ class AppController:
             self.player_progress_page.refresh()
         elif current_page == "history":
             self.history_window.load_history()
+
+    def _init_telemetry(self):
+        """Initialise the anonymous analytics client.
+
+        Opt-in: analytics is disabled by default. No events are collected,
+        queued, or transmitted until the user explicitly enables it in Settings.
+        All operations are non-blocking; failures are silently swallowed.
+        """
+        try:
+            self.telemetry = AnalyticsClient(self.app_settings)
+
+            # Connect to session signals for session_started / session_completed
+            self.dashboard.session_engine.session_started.connect(
+                lambda _: self._track("session_started")
+            )
+            self.dashboard.session_engine.session_completed.connect(
+                lambda _: self._track("session_completed")
+            )
+
+            # Connect to dashboard signals for task and goal events
+            self.dashboard.task_created.connect(lambda: self._track("task_created"))
+            self.dashboard.task_completed.connect(lambda: self._track("task_completed"))
+            self.dashboard.daily_goal_completed.connect(
+                lambda: self._track("daily_goal_completed")
+            )
+            self.dashboard.xp_changed.connect(lambda: self._track("xp_changed"))
+
+            # Track first_launch or app_launched (consent-gated)
+            self.telemetry.track_first_launch_or_app_launched()
+
+            # Detect version updates
+            previous_version = self.app_settings.value(
+                "telemetry/last_known_version", "", type=str
+            )
+            if previous_version and previous_version != _APP_VERSION:
+                self._track("app_version_updated")
+            self.app_settings.setValue("telemetry/last_known_version", _APP_VERSION)
+            self.app_settings.sync()
+
+            # Start periodic flush (every 5 minutes)
+            app = QApplication.instance()
+            if app is not None:
+                self.telemetry.start_flush_timer()
+                app.aboutToQuit.connect(self._flush_telemetry_on_shutdown)
+
+        except Exception:
+            # Analytics failure must never affect the application.
+            self.telemetry = None
+
+    def _track(self, event_name):
+        """Queue one analytics event. Non-blocking; failures are silent."""
+        try:
+            if self.telemetry is not None:
+                self.telemetry.track(event_name)
+        except Exception:
+            pass
+
+    def _flush_telemetry_on_shutdown(self):
+        """Attempt a final flush when the app is about to quit."""
+        try:
+            if self.telemetry is not None:
+                self.telemetry.flush()
+        except Exception:
+            pass
 
     def close_database(self):
         # Close the shared SQLite connection when the app exits.

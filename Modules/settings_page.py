@@ -164,9 +164,37 @@ class SettingsPage(QWidget):
             "Your activities, focus sessions and XP are stored locally.",
         )
 
+        privacy_section = SettingsSection(
+            "Privacy & Analytics",
+            "Ascend can collect anonymous product usage data to help "
+            "improve the application. This data helps understand which "
+            "features are used and how often — it never includes your "
+            "name, email, task names or content, school information, file "
+            "paths, precise location, or any personal data.\n\n"
+            "All data is associated with a random installation ID — not "
+            "your identity. You can enable or disable this at any time.",
+        )
+        privacy_row = QWidget()
+        privacy_layout = QHBoxLayout(privacy_row)
+        privacy_layout.setContentsMargins(0, Spacing.XS, 0, 0)
+        privacy_layout.setSpacing(Spacing.MD)
+        from PySide6.QtWidgets import QCheckBox
+        self.analytics_checkbox = QCheckBox(
+            "Share anonymous usage data to help improve Ascend"
+        )
+        self.analytics_checkbox.stateChanged.connect(self._on_analytics_toggled)
+        privacy_layout.addWidget(self.analytics_checkbox)
+        privacy_layout.addStretch()
+        privacy_section.add_row(privacy_row)
+        self.analytics_status = QLabel()
+        self.analytics_status.setObjectName("MutedText")
+        self.analytics_status.setWordWrap(True)
+        privacy_section.add_row(self.analytics_status)
+
         layout.addWidget(profile_section)
         layout.addWidget(theme_section)
         layout.addWidget(goal_section)
+        layout.addWidget(privacy_section)
         layout.addWidget(about_section)
         layout.addStretch()
 
@@ -180,6 +208,10 @@ class SettingsPage(QWidget):
         theme = self.app_settings.value("theme", "dark", type=str)
         index = self.theme_combo.findData(theme)
         self.theme_combo.setCurrentIndex(index if index >= 0 else 0)
+        # Load analytics consent state
+        consented = self.app_settings.value("telemetry/consented", False, type=bool)
+        self.analytics_checkbox.setChecked(consented)
+        self._update_analytics_status(consented)
         self.update_preview()
 
     def save_name(self):
@@ -212,3 +244,46 @@ class SettingsPage(QWidget):
         )
         self.status_label.setVisible(True)
         self.daily_goal_changed.emit(self.goal_input.value())
+
+    def _on_analytics_toggled(self, state):
+        """Handle analytics opt-in/opt-out toggle.
+
+        When enabled: consent is recorded; the AppController's telemetry
+        client (if it exists) is notified.
+        When disabled: consent is revoked and the local queue is purged.
+        """
+        from PySide6.QtWidgets import QCheckBox
+
+        consented = (state == QCheckBox.Checked)
+        self.app_settings.setValue("telemetry/consented", consented)
+        self.app_settings.sync()
+        self._update_analytics_status(consented)
+
+        # Notify the telemetry client if the app controller has one.
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                # Walk up to find the AppController (it owns the SettingsPage).
+                controller = getattr(app, "_ascend_controller", None)
+                if controller is not None and hasattr(controller, "telemetry"):
+                    if consented:
+                        controller.telemetry.enable()
+                    else:
+                        controller.telemetry.disable()
+        except Exception:
+            # Analytics toggle must never break the Settings page.
+            pass
+
+    def _update_analytics_status(self, consented):
+        """Update the status label below the analytics checkbox."""
+        if consented:
+            self.analytics_status.setText(
+                "Anonymous usage data is being shared. Thank you for "
+                "helping improve Ascend."
+            )
+        else:
+            self.analytics_status.setText(
+                "Anonymous usage data is not being shared. No data is "
+                "collected or sent."
+            )
