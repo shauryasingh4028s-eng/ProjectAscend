@@ -83,7 +83,7 @@ class AppController:
             self.app_settings.value("display_name", "Ascender", type=str)
         )
 
-        # ── Anonymous analytics (opt-in, consent-gated) ──
+        # ── Anonymous analytics (consent-gated, enabled by default) ──
         # Initialised last so all other components exist before any
         # telemetry call. Every call is non-blocking; failures are
         # silently swallowed so analytics never affect normal use.
@@ -229,9 +229,10 @@ class AppController:
     def _init_telemetry(self):
         """Initialise the anonymous analytics client.
 
-        Opt-in: analytics is disabled by default. No events are collected,
-        queued, or transmitted until the user explicitly enables it in Settings.
-        All operations are non-blocking; failures are silently swallowed.
+        Analytics is enabled by default for fresh installations and can
+        be disabled at any time in Settings. No personal data or task
+        content is ever collected. All operations are non-blocking;
+        failures are silently swallowed.
         """
         try:
             self.telemetry = AnalyticsClient(self.app_settings)

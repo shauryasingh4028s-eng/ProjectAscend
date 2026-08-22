@@ -5,7 +5,7 @@ product usage without collecting any personal data, task content, or
 productivity details.
 
 Key principles:
-- OPT-IN: Analytics is disabled by default. No data collected until user consents.
+- ENABLED BY DEFAULT: Analytics is enabled by default for fresh installations and can be disabled at any time.
 - MINIMAL: Only predefined events with empty per-event properties.
 - NON-BLOCKING: Every operation wrapped in try/except. Never crashes or delays the app.
 - LOCAL-FIRST: Events queue to local SQLite before transmission.
@@ -374,9 +374,9 @@ class AnalyticsClient:
         self._active_workers = []
 
     def is_enabled(self) -> bool:
-        """Return True if the user has explicitly consented to analytics."""
+        """Return True if analytics is enabled (enabled by default)."""
         try:
-            return self._qsettings.value(self._consent_key, False, type=bool)
+            return self._qsettings.value(self._consent_key, True, type=bool)
         except Exception as e:
             logger.debug(f"Failed to check consent status: {e}")
             return False

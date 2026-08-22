@@ -71,9 +71,9 @@ def consented_client(qsettings, telemetry_db):
 
 @pytest.fixture
 def qcore_app():
-    """A minimal QCoreApplication for signal processing in tests."""
-    from PySide6.QtCore import QCoreApplication
-    app = QCoreApplication.instance() or QCoreApplication([])
+    """A QApplication for signal and event processing in tests."""
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
     yield app
 
 
@@ -126,14 +126,57 @@ class TestInstallationId:
 # ─── CONSENT TESTS ────────────────────────────────────────────────────────────
 
 class TestConsent:
-    """Tests for the opt-in consent mechanism."""
+    """Tests for the consent mechanism (enabled by default, user controllable)."""
 
-    def test_consent_default_is_disabled(self, client):
-        """When telemetry/consented key is absent, analytics is disabled."""
+    def test_consent_default_is_enabled(self, client):
+        """When telemetry/consented key is absent, analytics is enabled by default."""
+        assert client.is_enabled() is True
+
+    def test_consent_fresh_installation_enabled_by_default(self, qsettings, telemetry_db):
+        """Fresh installation has analytics enabled by default without explicit key."""
+        from Modules.telemetry import AnalyticsClient
+
+        assert not qsettings.contains("telemetry/consented")
+        c = AnalyticsClient(qsettings, telemetry_db_path=telemetry_db)
+        assert c.is_enabled() is True
+        assert qsettings.value("telemetry/consented", True, type=bool) is True
+
+    def test_consent_existing_false_preserved(self, qsettings, telemetry_db):
+        """Existing False consent is preserved and remains disabled."""
+        from Modules.telemetry import AnalyticsClient
+
+        qsettings.setValue("telemetry/consented", False)
+        qsettings.sync()
+
+        c = AnalyticsClient(qsettings, telemetry_db_path=telemetry_db)
+        assert c.is_enabled() is False
+        assert qsettings.value("telemetry/consented", True, type=bool) is False
+
+    def test_consent_existing_true_preserved(self, qsettings, telemetry_db):
+        """Existing True consent is preserved and remains enabled."""
+        from Modules.telemetry import AnalyticsClient
+
+        qsettings.setValue("telemetry/consented", True)
+        qsettings.sync()
+
+        c = AnalyticsClient(qsettings, telemetry_db_path=telemetry_db)
+        assert c.is_enabled() is True
+        assert qsettings.value("telemetry/consented", True, type=bool) is True
+
+    def test_consent_toggling_persists_correctly(self, client, qsettings):
+        """Disabling and re-enabling persists correctly to settings."""
+        client.disable()
         assert client.is_enabled() is False
+        assert qsettings.value("telemetry/consented", True, type=bool) is False
+
+        client.enable()
+        assert client.is_enabled() is True
+        assert qsettings.value("telemetry/consented", True, type=bool) is True
 
     def test_consent_enable(self, client, qsettings):
         """Setting consent to True makes is_enabled() return True."""
+        client.disable()
+        assert client.is_enabled() is False
         client.enable()
         assert client.is_enabled() is True
         assert qsettings.value("telemetry/consented", type=bool) is True
@@ -158,14 +201,16 @@ class TestConsent:
         assert consented_client._event_store.count() == 0
 
     def test_no_events_collected_without_consent(self, client):
-        """track() calls before consent produce zero queued events."""
+        """track() calls when disabled produce zero queued events."""
+        client.disable()
         client.track("app_launched")
         client.track("session_started")
         client.track("task_created")
         assert client._event_store.count() == 0
 
     def test_no_events_queued_before_consent(self, client):
-        """first_launch is not queued on startup when consent is absent."""
+        """first_launch is not queued on startup when disabled."""
+        client.disable()
         client.track_first_launch_or_app_launched()
         assert client._event_store.count() == 0
 
@@ -176,6 +221,7 @@ class TestConsent:
 
     def test_enable_resets_installation_id(self, client, qsettings):
         """Re-enabling analytics generates a fresh installation ID."""
+        client.disable()
         # Get initial ID
         original_id = client._installation_id.get()
 
@@ -487,9 +533,11 @@ class TestTransmission:
         assert result is True
 
     def test_flush_does_nothing_without_consent(self, qsettings, telemetry_db):
-        """Flush does nothing when consent is not granted."""
+        """Flush does nothing when consent is disabled."""
         from Modules.telemetry import AnalyticsClient
 
+        qsettings.setValue("telemetry/consented", False)
+        qsettings.sync()
         c = AnalyticsClient(qsettings, telemetry_db_path=telemetry_db)
         # Manually enqueue an event bypassing consent
         event_id = str(uuid.uuid4())
@@ -555,7 +603,8 @@ class TestFirstLaunch:
         assert event_data["event"] == "app_launched"
 
     def test_first_launch_deferred_without_consent(self, client, qsettings):
-        """If no consent, first_launch flag stays unset; fires correctly once consent is granted."""
+        """If analytics is disabled, first_launch flag stays unset; fires correctly once enabled."""
+        client.disable()
         # Attempt first launch without consent
         client.track_first_launch_or_app_launched()
         assert client._event_store.count() == 0
@@ -889,3 +938,91 @@ class TestHTTPThreading:
         
         # Backend should have been called in the worker thread
         mock_backend.send_batch.assert_called()
+
+
+# ─── SETTINGS PAGE ANALYTICS UI TESTS ────────────────────────────────────────
+
+class TestSettingsPageAnalytics:
+    """Tests for the SettingsPage analytics UI and consent toggle."""
+
+    def test_settings_page_fresh_install_checked_by_default(self, qapp, database, tmp_path, monkeypatch):
+        """A fresh installation loads with analytics checkbox checked and default True."""
+        from Modules.settings_page import SettingsPage
+        from PySide6.QtCore import QSettings
+
+        settings_path = tmp_path / "settings_fresh.ini"
+        qs = QSettings(str(settings_path), QSettings.IniFormat)
+        qs.clear()
+        qs.sync()
+
+        monkeypatch.setattr("Modules.settings_page.QSettings", lambda *args, **kwargs: qs)
+
+        page = SettingsPage(database)
+        assert page.analytics_checkbox.isChecked() is True
+        assert "is being shared" in page.analytics_status.text()
+        assert page.app_settings.value("telemetry/consented", True, type=bool) is True
+
+    def test_settings_page_existing_false_preserved(self, qapp, database, tmp_path, monkeypatch):
+        """Existing False consent is preserved and checkbox loads unchecked."""
+        from Modules.settings_page import SettingsPage
+        from PySide6.QtCore import QSettings
+
+        settings_path = tmp_path / "settings_false.ini"
+        qs = QSettings(str(settings_path), QSettings.IniFormat)
+        qs.setValue("telemetry/consented", False)
+        qs.sync()
+
+        monkeypatch.setattr("Modules.settings_page.QSettings", lambda *args, **kwargs: qs)
+
+        page = SettingsPage(database)
+        assert page.analytics_checkbox.isChecked() is False
+        assert "not being shared" in page.analytics_status.text()
+        assert qs.value("telemetry/consented", True, type=bool) is False
+
+    def test_settings_page_existing_true_preserved(self, qapp, database, tmp_path, monkeypatch):
+        """Existing True consent is preserved and checkbox loads checked."""
+        from Modules.settings_page import SettingsPage
+        from PySide6.QtCore import QSettings
+
+        settings_path = tmp_path / "settings_true.ini"
+        qs = QSettings(str(settings_path), QSettings.IniFormat)
+        qs.setValue("telemetry/consented", True)
+        qs.sync()
+
+        monkeypatch.setattr("Modules.settings_page.QSettings", lambda *args, **kwargs: qs)
+
+        page = SettingsPage(database)
+        assert page.analytics_checkbox.isChecked() is True
+        assert "is being shared" in page.analytics_status.text()
+        assert qs.value("telemetry/consented", True, type=bool) is True
+
+    def test_settings_page_toggling_persists_and_notifies_controller(self, qapp, database, tmp_path, monkeypatch):
+        """User unchecking and checking updates QSettings and calls telemetry enable/disable."""
+        from Modules.settings_page import SettingsPage
+        from PySide6.QtCore import QSettings
+
+        settings_path = tmp_path / "settings_toggle.ini"
+        qs = QSettings(str(settings_path), QSettings.IniFormat)
+        qs.clear()
+        qs.sync()
+
+        monkeypatch.setattr("Modules.settings_page.QSettings", lambda *args, **kwargs: qs)
+
+        mock_telemetry = MagicMock()
+        mock_controller = MagicMock()
+        mock_controller.telemetry = mock_telemetry
+        qapp._ascend_controller = mock_controller
+
+        page = SettingsPage(database)
+
+        # Uncheck analytics
+        page.analytics_checkbox.setChecked(False)
+        assert qs.value("telemetry/consented", True, type=bool) is False
+        assert "not being shared" in page.analytics_status.text()
+        mock_telemetry.disable.assert_called()
+
+        # Re-check analytics
+        page.analytics_checkbox.setChecked(True)
+        assert qs.value("telemetry/consented", True, type=bool) is True
+        assert "is being shared" in page.analytics_status.text()
+        mock_telemetry.enable.assert_called()
