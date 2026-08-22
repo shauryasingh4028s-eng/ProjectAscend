@@ -9,6 +9,10 @@ Key principles:
 - MINIMAL: Only predefined events with empty per-event properties.
 - NON-BLOCKING: Every operation wrapped in try/except. Never crashes or delays the app.
 - LOCAL-FIRST: Events queue to local SQLite before transmission.
+- FAIL-SAFE TRANSMISSION: Network errors, timeouts, HTTP 429 and 5xx responses are
+  retried on the next flush; an HTTP 4xx response (invalid/revoked API key or a
+  malformed request) permanently stops transmission for the rest of the session.
+  PostHog deduplicates events server-side by each event's `uuid` field.
 - NO PII: No names, emails, task content, school info, location, files, or device IDs.
 """
 
@@ -19,10 +23,13 @@ import platform
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from Modules.version import APP_VERSION  # Single authoritative application version
 
 # Import Qt threading for non-blocking HTTP
 try:
@@ -36,16 +43,16 @@ except ImportError:
 # PostHog Cloud (verified July 2026)
 # Free tier: 1M events/month. No credit card required.
 #
-# CONFIGURE: Create a PostHog project and fill in POSTHOG_API_KEY.
+# The project API key for the Project Ascend analytics project is set below.
 # The project API key is PUBLIC by design (like a Google Analytics tracking ID).
 # It grants write-only access to one project's event stream.
 # No privileged secret, admin token, or database password is embedded.
-POSTHOG_API_KEY = ""  # ← Fill in from PostHog project settings
+POSTHOG_API_KEY = "phc_qs78bn7PSeyND74kQyVTGDHStwHgft2QtaiSqHBzccMa"  # Project ingestion key (public, write-only by design)
 POSTHOG_BATCH_URL = "https://us.i.posthog.com/batch/"
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
-APP_VERSION = "1.4.0"
+# APP_VERSION comes from Modules.version (single authoritative source above).
 TELEMETRY_SCHEMA_VERSION = 1
 MAX_QUEUE_SIZE = 500
 FLUSH_BATCH_SIZE = 50
@@ -81,6 +88,23 @@ def _detect_os_family() -> str:
 OS_FAMILY = _detect_os_family()
 
 logger = logging.getLogger(__name__)
+
+
+# ─── TRANSMISSION RESULT ──────────────────────────────────────────────────────
+class SendResult(Enum):
+    """Outcome of a single batch transmission attempt.
+
+    SUCCESS:            batch accepted (or a no-op: no key configured / empty batch).
+    RETRYABLE_FAILURE:  transient problem — network error, timeout, HTTP 429 or 5xx.
+                        Events stay queued and are retried on the next flush.
+    PERMANENT_FAILURE:  HTTP 4xx (other than 429) — an invalid/revoked API key or a
+                        malformed request. Retrying the same configuration cannot
+                        succeed, so transmission stops for the rest of the session.
+    """
+
+    SUCCESS = "success"
+    RETRYABLE_FAILURE = "retryable_failure"
+    PERMANENT_FAILURE = "permanent_failure"
 
 
 # ─── INSTALLATION ID ──────────────────────────────────────────────────────────
@@ -134,8 +158,15 @@ class InstallationId:
 class EventStore:
     """Local SQLite queue for pending analytics events.
 
-    Events are stored here before being transmitted to PostHog.
-    The queue is bounded to MAX_QUEUE_SIZE events.
+    Events are keyed by their event UUID — the same value that is sent to
+    PostHog in each event's `uuid` field, where it enables server-side
+    deduplication. The queue is bounded to MAX_QUEUE_SIZE events.
+
+    Schema migration: builds before the `uuid` migration used a primary-key
+    column named `event_id`. On first run with a current build the table is
+    rebuilt in place (a rebuild instead of RENAME COLUMN works on every
+    SQLite version), preserving every previously queued event, so restart
+    persistence is unaffected by the upgrade.
     """
 
     def __init__(self, db_path: Path):
@@ -144,48 +175,72 @@ class EventStore:
         self._init_database()
 
     def _init_database(self):
-        """Create the events table if it doesn't exist."""
+        """Create the events table if needed and migrate legacy schemas."""
         try:
             conn = sqlite3.connect(str(self._db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS pending_events (
-                    event_id TEXT PRIMARY KEY,
-                    event_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-            """)
-            conn.commit()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_events (
+                        event_uuid TEXT PRIMARY KEY,
+                        event_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                columns = {
+                    row[1] for row in cursor.execute("PRAGMA table_info(pending_events)")
+                }
+                if "event_uuid" not in columns and "event_id" in columns:
+                    # Legacy schema (event_id PRIMARY KEY): rebuild the table
+                    # with the new column name, keeping all queued events.
+                    # INSERT OR IGNORE makes a re-run after an interrupted
+                    # migration safe.
+                    cursor.execute("DROP TABLE IF EXISTS pending_events_new")
+                    cursor.execute("""
+                        CREATE TABLE pending_events_new (
+                            event_uuid TEXT PRIMARY KEY,
+                            event_json TEXT NOT NULL,
+                            created_at TEXT NOT NULL
+                        )
+                    """)
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO pending_events_new (event_uuid, event_json, created_at)
+                        SELECT event_id, event_json, created_at FROM pending_events
+                    """)
+                    cursor.execute("DROP TABLE pending_events")
+                    cursor.execute("ALTER TABLE pending_events_new RENAME TO pending_events")
+                conn.commit()
+            finally:
+                conn.close()
         except Exception as e:
             logger.debug(f"Failed to initialize event store: {e}")
 
-    def enqueue(self, event_id: str, event_data: dict) -> bool:
+    def enqueue(self, event_uuid: str, event_data: dict) -> bool:
         """Add an event to the queue. Returns True on success.
 
-        Prevents duplicates by event_id (PRIMARY KEY constraint).
+        Prevents duplicates by event_uuid (PRIMARY KEY constraint).
         """
         try:
             conn = sqlite3.connect(str(self._db_path))
             cursor = conn.cursor()
 
             # Check if event already exists (idempotency)
-            cursor.execute("SELECT 1 FROM pending_events WHERE event_id = ?", (event_id,))
+            cursor.execute("SELECT 1 FROM pending_events WHERE event_uuid = ?", (event_uuid,))
             if cursor.fetchone():
                 conn.close()
                 return False
 
             # Insert the event
             cursor.execute(
-                "INSERT INTO pending_events (event_id, event_json, created_at) VALUES (?, ?, ?)",
-                (event_id, json.dumps(event_data), datetime.now(timezone.utc).isoformat())
+                "INSERT INTO pending_events (event_uuid, event_json, created_at) VALUES (?, ?, ?)",
+                (event_uuid, json.dumps(event_data), datetime.now(timezone.utc).isoformat())
             )
 
             # Enforce queue size limit - delete oldest events
             cursor.execute(f"""
                 DELETE FROM pending_events
-                WHERE event_id NOT IN (
-                    SELECT event_id FROM pending_events
+                WHERE event_uuid NOT IN (
+                    SELECT event_uuid FROM pending_events
                     ORDER BY created_at DESC
                     LIMIT {MAX_QUEUE_SIZE}
                 )
@@ -199,12 +254,12 @@ class EventStore:
             return False
 
     def get_pending_events(self, limit: int = FLUSH_BATCH_SIZE) -> list:
-        """Return up to `limit` pending events, oldest first."""
+        """Return up to `limit` pending events as (event_uuid, event_data), oldest first."""
         try:
             conn = sqlite3.connect(str(self._db_path))
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT event_id, event_json FROM pending_events ORDER BY created_at ASC LIMIT ?",
+                "SELECT event_uuid, event_json FROM pending_events ORDER BY created_at ASC LIMIT ?",
                 (limit,)
             )
             rows = cursor.fetchall()
@@ -214,15 +269,18 @@ class EventStore:
             logger.debug(f"Failed to get pending events: {e}")
             return []
 
-    def delete_events(self, event_ids: list):
-        """Delete events by their IDs (after successful transmission)."""
-        if not event_ids:
+    def delete_events(self, event_uuids: list):
+        """Delete events by their UUIDs (after successful transmission)."""
+        if not event_uuids:
             return
         try:
             conn = sqlite3.connect(str(self._db_path))
             cursor = conn.cursor()
-            placeholders = ",".join(["?"] * len(event_ids))
-            cursor.execute(f"DELETE FROM pending_events WHERE event_id IN ({placeholders})", event_ids)
+            placeholders = ",".join(["?"] * len(event_uuids))
+            cursor.execute(
+                f"DELETE FROM pending_events WHERE event_uuid IN ({placeholders})",
+                event_uuids,
+            )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -255,28 +313,54 @@ class EventStore:
 
 # ─── ANALYTICS BACKEND (HTTP TRANSMITTER) ─────────────────────────────────────
 class AnalyticsBackend:
-    """HTTP transmitter for PostHog batch API.
+    """HTTP transmitter for the PostHog batch API.
 
     Sends events to POSTHOG_BATCH_URL with the project API key.
     When POSTHOG_API_KEY is empty, transmission is a no-op.
+
+    Failure policy: network errors, timeouts, HTTP 429 (rate limiting) and
+    HTTP 5xx are transient and return SendResult.RETRYABLE_FAILURE so events
+    are retried on the next flush. Any other HTTP 4xx means the request
+    itself can never succeed — typically an invalid or revoked API key — so
+    the backend returns SendResult.PERMANENT_FAILURE and refuses further
+    network calls for the rest of the session instead of retrying the same
+    request every few minutes.
     """
 
     def __init__(self):
         self._api_key = POSTHOG_API_KEY
         self._batch_url = POSTHOG_BATCH_URL
+        self._transmission_disabled = False
 
-    def send_batch(self, events: list) -> bool:
-        """Send a batch of events to PostHog. Returns True on success.
+    @property
+    def transmission_disabled(self) -> bool:
+        """True after PostHog permanently rejected a batch (HTTP 4xx)."""
+        return self._transmission_disabled
 
-        events: list of event dicts (without event_id wrapper)
+    def reset_transmission_disabled(self):
+        """Re-allow transmission (used when analytics is re-consented)."""
+        self._transmission_disabled = False
+
+    def send_batch(self, events: list) -> SendResult:
+        """Send a batch of events to PostHog. Returns the SendResult outcome.
+
+        events: list of event dicts in the PostHog wire format (with `uuid`).
+
+        Never raises: any unexpected error is logged at debug level and
+        reported as a retryable failure.
         """
+        if self._transmission_disabled:
+            # A 4xx earlier this session means retrying cannot succeed.
+            logger.debug("PostHog transmission disabled for this session (earlier 4xx)")
+            return SendResult.PERMANENT_FAILURE
+
         if not self._api_key:
             # No API key configured - no-op
             logger.debug("PostHog API key not configured - skipping transmission")
-            return True
+            return SendResult.SUCCESS
 
         if not events:
-            return True
+            return SendResult.SUCCESS
 
         try:
             payload = {
@@ -293,54 +377,75 @@ class AnalyticsBackend:
             )
 
             with urlopen(req, timeout=10) as response:
-                if response.status == 200:
-                    return True
-                else:
-                    logger.debug(f"PostHog returned status {response.status}")
-                    return False
-        except (URLError, HTTPError) as e:
-            logger.debug(f"PostHog HTTP error: {e}")
-            return False
+                if 200 <= response.status < 300:
+                    return SendResult.SUCCESS
+                return self._classify_http_status(response.status)
+        except HTTPError as e:
+            # Non-2xx responses surface as HTTPError (a URLError subclass, so
+            # this except clause must come first).
+            return self._classify_http_status(e.code)
+        except (URLError, TimeoutError, OSError) as e:
+            # Network unreachable, DNS failure, connection reset, timeout, ...
+            logger.debug(f"PostHog network error (retryable): {e}")
+            return SendResult.RETRYABLE_FAILURE
         except Exception as e:
-            logger.debug(f"PostHog transmission failed: {e}")
-            return False
+            logger.debug(f"PostHog transmission failed (retryable): {e}")
+            return SendResult.RETRYABLE_FAILURE
+
+    def _classify_http_status(self, status: int) -> SendResult:
+        """Map an HTTP status code to a transmission outcome."""
+        if 400 <= status < 500 and status != 429:
+            # Invalid/revoked API key (401/403) or a request PostHog refuses
+            # to process (400/404, ...). Retrying the same configuration
+            # cannot succeed.
+            logger.debug(
+                f"PostHog permanently rejected the batch (HTTP {status}) - "
+                "disabling transmission for this session"
+            )
+            self._transmission_disabled = True
+            return SendResult.PERMANENT_FAILURE
+        # 5xx, 429 rate limiting, and anything unexpected: try again later.
+        logger.debug(f"PostHog transient failure (HTTP {status}) - will retry on next flush")
+        return SendResult.RETRYABLE_FAILURE
 
 
 # ─── FLUSH WORKER THREAD (NON-BLOCKING HTTP) ─────────────────────────────────
 class FlushWorker(QThread if QT_AVAILABLE else object):
     """Worker thread for non-blocking HTTP transmission.
 
-    Prevents network I/O from blocking the UI thread.
+    Prevents network I/O from blocking the UI thread. Emits the SendResult
+    via flush_completed; connected slots run on the GUI thread (queued
+    delivery), so queue bookkeeping never runs concurrently with track().
     """
 
-    flush_completed = QtSignal(bool) if QT_AVAILABLE else None
+    flush_completed = QtSignal(object) if QT_AVAILABLE else None  # carries a SendResult
 
-    def __init__(self, backend: AnalyticsBackend, events: list, event_ids: list, parent=None):
+    def __init__(self, backend: AnalyticsBackend, events: list, event_uuids: list, parent=None):
         if QT_AVAILABLE:
             super().__init__(parent)
         self._backend = backend
         self._events = events
-        self._event_ids = event_ids
-        self._success = False
+        self._event_uuids = event_uuids
+        self._result = SendResult.RETRYABLE_FAILURE
 
     def run(self):
         """Execute HTTP transmission in worker thread."""
         try:
-            self._success = self._backend.send_batch(self._events)
+            self._result = self._backend.send_batch(self._events)
         except Exception as e:
             logger.debug(f"Flush worker failed: {e}")
-            self._success = False
+            self._result = SendResult.RETRYABLE_FAILURE
         finally:
             if QT_AVAILABLE and self.flush_completed:
-                self.flush_completed.emit(self._success)
+                self.flush_completed.emit(self._result)
 
     @property
-    def success(self) -> bool:
-        return self._success
+    def result(self) -> SendResult:
+        return self._result
 
     @property
-    def event_ids(self) -> list:
-        return self._event_ids
+    def event_uuids(self) -> list:
+        return self._event_uuids
 
 
 # ─── ANALYTICS CLIENT (ORCHESTRATOR) ──────────────────────────────────────────
@@ -369,7 +474,11 @@ class AnalyticsClient:
 
         # Flush scheduler (QTimer) - initialized lazily to avoid Qt dependency in tests
         self._flush_timer = None
-        
+
+        # Set when PostHog permanently rejects a batch (HTTP 4xx) this session.
+        # flush() early-returns while set; cleared on restart and on re-consent.
+        self._transmission_disabled = False
+
         # Keep references to worker threads to prevent garbage collection
         self._active_workers = []
 
@@ -388,6 +497,9 @@ class AnalyticsClient:
             self._qsettings.sync()
             # Reset installation ID for privacy (unlink old and new data)
             self._installation_id.reset()
+            # Re-consent re-arms transmission after any permanent (4xx) failure
+            self._transmission_disabled = False
+            self._backend.reset_transmission_disabled()
         except Exception as e:
             logger.debug(f"Failed to enable analytics: {e}")
 
@@ -417,11 +529,11 @@ class AnalyticsClient:
                 return
 
             # Build event envelope
-            event_id = str(uuid.uuid4())
-            event_data = self._build_event(event_name, event_id)
+            event_uuid = str(uuid.uuid4())
+            event_data = self._build_event(event_name, event_uuid)
 
             # Enqueue to local store
-            self._event_store.enqueue(event_id, event_data)
+            self._event_store.enqueue(event_uuid, event_data)
 
         except Exception as e:
             logger.debug(f"Failed to track event: {e}")
@@ -449,11 +561,14 @@ class AnalyticsClient:
         except Exception as e:
             logger.debug(f"Failed to track launch: {e}")
 
-    def _build_event(self, event_name: str, event_id: str) -> dict:
+    def _build_event(self, event_name: str, event_uuid: str) -> dict:
         """Build the event envelope with common properties."""
         return {
             "event": event_name,
-            "event_id": event_id,
+            # PostHog deduplicates events by their top-level `uuid` field.
+            # The same UUID keys the local queue, so retried deliveries are
+            # dropped server-side instead of counted twice.
+            "uuid": event_uuid,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "properties": {
                 "distinct_id": self._installation_id.get(),
@@ -463,6 +578,20 @@ class AnalyticsClient:
                 "telemetry_schema": TELEMETRY_SCHEMA_VERSION,
             }
         }
+
+    @staticmethod
+    def _normalize_for_transmission(event_data: dict) -> dict:
+        """Return the event in the current PostHog wire format.
+
+        Events queued by builds older than the `uuid` migration stored their
+        event UUID under a legacy `event_id` key inside the JSON payload;
+        rename it on the way out so migrated events also get PostHog's
+        server-side deduplication.
+        """
+        if "uuid" not in event_data and "event_id" in event_data:
+            event_data = dict(event_data)
+            event_data["uuid"] = event_data.pop("event_id")
+        return event_data
 
     def flush(self):
         """Attempt to send pending events to PostHog.
@@ -474,36 +603,45 @@ class AnalyticsClient:
             if not self.is_enabled():
                 return
 
+            if self._transmission_disabled:
+                # PostHog permanently rejected a batch (HTTP 4xx) earlier this
+                # session. Retrying the same configuration cannot succeed, so
+                # don't keep hammering the API every flush interval.
+                return
+
             # Get pending events
             pending = self._event_store.get_pending_events(FLUSH_BATCH_SIZE)
             if not pending:
                 return
 
-            # Extract event data and IDs
-            events_to_send = [event_data for event_id, event_data in pending]
-            event_ids = [event_id for event_id, _ in pending]
+            # Extract event UUIDs and normalize payloads to the wire format
+            events_to_send = [
+                self._normalize_for_transmission(event_data)
+                for _, event_data in pending
+            ]
+            event_uuids = [event_uuid for event_uuid, _ in pending]
 
             # Use worker thread for non-blocking HTTP
             if QT_AVAILABLE and QThread is not None:
-                worker = FlushWorker(self._backend, events_to_send, event_ids)
-                
+                worker = FlushWorker(self._backend, events_to_send, event_uuids)
+
                 # Clean up finished workers
                 self._active_workers = [w for w in self._active_workers if w.isRunning()]
-                
+
                 # Store reference to prevent garbage collection
                 self._active_workers.append(worker)
-                
+
                 worker.flush_completed.connect(
-                    lambda success, ids=event_ids: self._on_flush_complete(success, ids)
+                    lambda result, ids=event_uuids: self._on_flush_complete(result, ids)
                 )
                 worker.flush_completed.connect(
-                    lambda success, w=worker: self._cleanup_worker(w)
+                    lambda result, w=worker: self._cleanup_worker(w)
                 )
                 worker.start()
             else:
                 # Fallback: synchronous (for tests or when Qt unavailable)
-                success = self._backend.send_batch(events_to_send)
-                self._on_flush_complete(success, event_ids)
+                result = self._backend.send_batch(events_to_send)
+                self._on_flush_complete(result, event_uuids)
 
         except Exception as e:
             logger.debug(f"Failed to flush events: {e}")
@@ -516,12 +654,19 @@ class AnalyticsClient:
         except Exception as e:
             logger.debug(f"Failed to cleanup worker: {e}")
 
-    def _on_flush_complete(self, success: bool, event_ids: list):
-        """Handle flush completion from worker thread."""
+    def _on_flush_complete(self, result, event_uuids: list):
+        """Handle flush completion (runs on the GUI thread via queued signal)."""
         try:
-            if success:
+            if result is SendResult.SUCCESS:
                 # Delete sent events
-                self._event_store.delete_events(event_ids)
+                self._event_store.delete_events(event_uuids)
+            elif result is SendResult.PERMANENT_FAILURE:
+                # The current configuration can never deliver these events.
+                # Keep the queue intact — a future build with a corrected
+                # API key can still deliver it — but stop transmitting for
+                # the rest of this session.
+                self._transmission_disabled = True
+            # RETRYABLE_FAILURE: events stay queued and are retried next flush.
         except Exception as e:
             logger.debug(f"Failed to handle flush completion: {e}")
 
