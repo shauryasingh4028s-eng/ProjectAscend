@@ -8,6 +8,7 @@ existing Database API.
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -166,19 +167,19 @@ class SettingsPage(QWidget):
 
         privacy_section = SettingsSection(
             "Privacy & Analytics",
-            "Ascend can collect anonymous product usage data to help "
-            "improve the application. This data helps understand which "
+            "Ascend collects anonymous product usage data by default to "
+            "help improve the application. This data helps understand which "
             "features are used and how often — it never includes your "
             "name, email, task names or content, school information, file "
             "paths, precise location, or any personal data.\n\n"
             "All data is associated with a random installation ID — not "
-            "your identity. You can enable or disable this at any time.",
+            "your identity. Analytics is enabled by default and can be "
+            "disabled at any time.",
         )
         privacy_row = QWidget()
         privacy_layout = QHBoxLayout(privacy_row)
         privacy_layout.setContentsMargins(0, Spacing.XS, 0, 0)
         privacy_layout.setSpacing(Spacing.MD)
-        from PySide6.QtWidgets import QCheckBox
         self.analytics_checkbox = QCheckBox(
             "Share anonymous usage data to help improve Ascend"
         )
@@ -208,9 +209,11 @@ class SettingsPage(QWidget):
         theme = self.app_settings.value("theme", "dark", type=str)
         index = self.theme_combo.findData(theme)
         self.theme_combo.setCurrentIndex(index if index >= 0 else 0)
-        # Load analytics consent state
-        consented = self.app_settings.value("telemetry/consented", False, type=bool)
+        # Load analytics consent state (defaults to True for fresh installation)
+        consented = self.app_settings.value("telemetry/consented", True, type=bool)
+        self.analytics_checkbox.blockSignals(True)
         self.analytics_checkbox.setChecked(consented)
+        self.analytics_checkbox.blockSignals(False)
         self._update_analytics_status(consented)
         self.update_preview()
 
@@ -252,9 +255,7 @@ class SettingsPage(QWidget):
         client (if it exists) is notified.
         When disabled: consent is revoked and the local queue is purged.
         """
-        from PySide6.QtWidgets import QCheckBox
-
-        consented = (state == QCheckBox.Checked)
+        consented = bool(state)
         self.app_settings.setValue("telemetry/consented", consented)
         self.app_settings.sync()
         self._update_analytics_status(consented)
@@ -266,7 +267,7 @@ class SettingsPage(QWidget):
             if app is not None:
                 # Walk up to find the AppController (it owns the SettingsPage).
                 controller = getattr(app, "_ascend_controller", None)
-                if controller is not None and hasattr(controller, "telemetry"):
+                if controller is not None and hasattr(controller, "telemetry") and controller.telemetry is not None:
                     if consented:
                         controller.telemetry.enable()
                     else:
