@@ -3,9 +3,11 @@
 Covers:
 - Installation ID creation and persistence
 - Consent (opt-in) behaviour
-- Event schema validation
+- Event schema validation (PostHog `uuid` dedup field)
 - Local queue persistence
-- Duplicate prevention (event_id)
+- Duplicate prevention (event_uuid)
+- Legacy `event_id` schema migration (no data loss on upgrade)
+- PostHog 4xx = permanent failure (no endless retry), 5xx/429/network = retryable
 - Offline behaviour / queue bounded at 500
 - Failed transmission / retry
 - Malformed backend responses
@@ -23,6 +25,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from Modules.telemetry import SendResult
+from Modules.version import APP_VERSION
 
 # Qt offscreen for headless CI
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -244,25 +249,30 @@ class TestEventSchema:
         pending = consented_client._event_store.get_pending_events(1)
         assert len(pending) == 1
 
-        event_id, event_data = pending[0]
+        event_uuid, event_data = pending[0]
         props = event_data["properties"]
 
         assert event_data["event"] == "app_launched"
         assert "timestamp" in event_data
-        assert "event_id" in event_data
+        # PostHog's server-side dedup field; the legacy `event_id` key must
+        # no longer appear on the wire envelope.
+        assert "uuid" in event_data
+        assert "event_id" not in event_data
+        # The local queue key and the wire uuid are the same value
+        assert event_data["uuid"] == event_uuid
         assert props["distinct_id"] == consented_client._installation_id.get()
         assert props["$process_person_profile"] is False
-        assert props["app_version"] == "1.4.0"
+        assert props["app_version"] == APP_VERSION
         assert props["os_family"] in ("windows", "macos", "linux", "unknown")
         assert props["telemetry_schema"] == 1
 
-    def test_event_id_is_uuid4(self, consented_client):
-        """Each event gets a unique UUID4 event_id."""
+    def test_event_uuid_is_uuid4(self, consented_client):
+        """Each event gets a unique UUID4 uuid (PostHog dedup field)."""
         consented_client.track("app_launched")
         pending = consented_client._event_store.get_pending_events(1)
         _, event_data = pending[0]
 
-        parsed = uuid.UUID(event_data["event_id"])
+        parsed = uuid.UUID(event_data["uuid"])
         assert parsed.version == 4
 
     def test_only_predefined_events_allowed(self, consented_client):
@@ -313,9 +323,7 @@ class TestEventSchema:
         assert ts.endswith("+00:00") or ts.endswith("Z")
 
     def test_app_version_in_envelope(self, consented_client):
-        """Every event includes the correct app_version."""
-        from Modules.telemetry import APP_VERSION
-
+        """Every event includes the authoritative application version."""
         consented_client.track("session_started")
         pending = consented_client._event_store.get_pending_events(1)
         _, event_data = pending[0]
@@ -386,23 +394,28 @@ class TestDuplicatePrevention:
     """Tests for event_id-based idempotency."""
 
     def test_duplicate_prevention(self, consented_client):
-        """Same event_id is never enqueued twice.
+        """Same event UUID is never enqueued twice.
 
         Since track() generates a new UUID each time, duplicates must be
-        tested by directly calling EventStore.enqueue with the same event_id.
+        tested by directly calling EventStore.enqueue with the same
+        event_uuid.
         """
-        event_id = str(uuid.uuid4())
-        event_data = {"event": "app_launched", "timestamp": "2026-08-21T00:00:00Z"}
+        event_uuid = str(uuid.uuid4())
+        event_data = {
+            "event": "app_launched",
+            "uuid": event_uuid,
+            "timestamp": "2026-08-21T00:00:00Z",
+        }
 
-        result1 = consented_client._event_store.enqueue(event_id, event_data)
-        result2 = consented_client._event_store.enqueue(event_id, event_data)
+        result1 = consented_client._event_store.enqueue(event_uuid, event_data)
+        result2 = consented_client._event_store.enqueue(event_uuid, event_data)
 
         assert result1 is True
         assert result2 is False  # Duplicate rejected
         assert consented_client._event_store.count() == 1
 
-    def test_different_event_ids_are_separate(self, consented_client):
-        """Events with different event_ids are stored separately."""
+    def test_different_event_uuids_are_separate(self, consented_client):
+        """Events with different event UUIDs are stored separately."""
         id1 = str(uuid.uuid4())
         id2 = str(uuid.uuid4())
         data = {"event": "app_launched"}
@@ -424,7 +437,7 @@ class TestTransmission:
         consented_client.track("session_started")
 
         mock_backend = MagicMock()
-        mock_backend.send_batch.return_value = True
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
         consented_client._backend = mock_backend
 
         consented_client.flush()
@@ -446,11 +459,11 @@ class TestTransmission:
         consented_client.track("session_started")
 
         mock_backend = MagicMock()
-        mock_backend.send_batch.return_value = True
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
         consented_client._backend = mock_backend
 
         consented_client.flush()
-        
+
         # Wait for worker thread to complete with event processing
         import time
         for _ in range(100):  # Wait up to 1 second
@@ -458,20 +471,20 @@ class TestTransmission:
                 break
             qcore_app.processEvents()
             time.sleep(0.01)
-        
+
         # Process any remaining events
         for _ in range(10):
             qcore_app.processEvents()
             time.sleep(0.01)
-        
+
         assert consented_client._event_store.count() == 0
 
     def test_flush_retry_on_failure(self, consented_client, qcore_app):
-        """Failed flush keeps events queued for next attempt."""
+        """Transiently failed flush keeps events queued for next attempt."""
         consented_client.track("app_launched")
 
         mock_backend = MagicMock()
-        mock_backend.send_batch.return_value = False  # Simulate failure
+        mock_backend.send_batch.return_value = SendResult.RETRYABLE_FAILURE
         consented_client._backend = mock_backend
 
         consented_client.flush()
@@ -493,7 +506,7 @@ class TestTransmission:
         assert consented_client._event_store.count() == 1
 
         # Next flush retries
-        mock_backend.send_batch.return_value = True
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
         consented_client.flush()
         
         # Wait for worker thread to complete with event processing
@@ -525,12 +538,19 @@ class TestTransmission:
         assert consented_client._event_store.count() == 1
 
     def test_no_transmission_without_api_key(self, consented_client):
-        """When POSTHOG_API_KEY is empty, flush is a no-op that succeeds."""
+        """A backend without an API key treats transmission as a no-op SUCCESS."""
+        from Modules.telemetry import AnalyticsBackend
+
         consented_client.track("app_launched")
 
-        # The backend has no API key (default), so send_batch returns True (no-op)
-        result = consented_client._backend.send_batch([{"event": "test"}])
-        assert result is True
+        # Explicitly unconfigured backend (independent of the shipped key):
+        # no network call is attempted and the send is a no-op SUCCESS.
+        backend = AnalyticsBackend()
+        backend._api_key = ""
+        with patch("Modules.telemetry.urlopen") as mock_urlopen:
+            result = backend.send_batch([{"event": "test"}])
+        assert result is SendResult.SUCCESS
+        mock_urlopen.assert_not_called()
 
     def test_flush_does_nothing_without_consent(self, qsettings, telemetry_db):
         """Flush does nothing when consent is disabled."""
@@ -560,7 +580,7 @@ class TestOfflineBehaviour:
     def test_offline_events_accumulate(self, consented_client):
         """When backend is unreachable, events stay in queue across multiple calls."""
         mock_backend = MagicMock()
-        mock_backend.send_batch.return_value = False
+        mock_backend.send_batch.return_value = SendResult.RETRYABLE_FAILURE
         consented_client._backend = mock_backend
 
         consented_client.track("app_launched")
@@ -832,11 +852,15 @@ class TestPostHogBatchFormat:
 
         # The format sent to PostHog /batch/ should have:
         # - "event": event name
+        # - "uuid": event UUID (PostHog server-side dedup field)
         # - "properties": { "distinct_id": ..., ... }
         # - "timestamp": ISO 8601
         assert "event" in local_event
+        assert "uuid" in local_event
+        assert "event_id" not in local_event  # legacy key must not leak
         assert "properties" in local_event
         assert "timestamp" in local_event
+        uuid.UUID(local_event["uuid"])  # must be a valid UUID
         assert "distinct_id" in local_event["properties"]
         assert "$process_person_profile" in local_event["properties"]
 
@@ -845,11 +869,11 @@ class TestPostHogBatchFormat:
         consented_client.track("app_launched")
 
         mock_backend = MagicMock()
-        mock_backend.send_batch.return_value = True
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
         consented_client._backend = mock_backend
 
         consented_client.flush()
-        
+
         # Wait for worker thread
         import time
         time.sleep(0.1)
@@ -862,6 +886,8 @@ class TestPostHogBatchFormat:
         event = batch[0]
         assert "event" in event
         assert "properties" in event
+        assert "uuid" in event  # PostHog dedup field present on the wire
+        assert "event_id" not in event
         assert "distinct_id" in event["properties"]
         assert event["properties"]["$process_person_profile"] is False
 
@@ -876,18 +902,18 @@ class TestHTTPThreading:
         from Modules.telemetry import QT_AVAILABLE, FlushWorker
         
         consented_client.track("app_launched")
-        
+
         mock_backend = MagicMock()
-        mock_backend.send_batch.return_value = True
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
         consented_client._backend = mock_backend
-        
+
         # Track if FlushWorker is instantiated
         original_init = FlushWorker.__init__
         worker_created = []
-        
-        def tracking_init(self, backend, events, event_ids, parent=None):
+
+        def tracking_init(self, backend, events, event_uuids, parent=None):
             worker_created.append(True)
-            original_init(self, backend, events, event_ids, parent)
+            original_init(self, backend, events, event_uuids, parent)
         
         FlushWorker.__init__ = tracking_init
         
@@ -918,7 +944,7 @@ class TestHTTPThreading:
         # Simulate a slow network call (but with short timeout for test)
         def slow_send_batch(events):
             time.sleep(0.05)  # Simulate network delay
-            return True
+            return SendResult.SUCCESS
         
         mock_backend = MagicMock()
         mock_backend.send_batch.side_effect = slow_send_batch
@@ -1026,3 +1052,290 @@ class TestSettingsPageAnalytics:
         assert qs.value("telemetry/consented", True, type=bool) is True
         assert "is being shared" in page.analytics_status.text()
         mock_telemetry.enable.assert_called()
+
+
+# ─── PERMANENT HTTP FAILURE (4XX) TESTS ──────────────────────────────────────
+
+class TestPermanentHttpFailure:
+    """HTTP 4xx = permanent configuration/request failure; 5xx/429/network
+    errors stay retryable. A rejected batch must never be retried every
+    5 minutes forever. All paths remain non-blocking and failure-safe."""
+
+    def _backend_with_key(self):
+        from Modules.telemetry import AnalyticsBackend
+
+        backend = AnalyticsBackend()
+        backend._api_key = "phc_test_key"  # pretend a key is configured
+        return backend
+
+    @staticmethod
+    def _http_error(code):
+        from urllib.error import HTTPError
+
+        return HTTPError(
+            "https://us.i.posthog.com/batch/", code, f"HTTP {code}", {}, None
+        )
+
+    @staticmethod
+    def _ok_response(status=200):
+        response = MagicMock()
+        response.status = status
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        return response
+
+    @pytest.mark.parametrize("code", [400, 401, 403, 404, 410])
+    def test_4xx_is_permanent_and_stops_network_retries(self, code):
+        """A 4xx disables the backend for the session; no further HTTP calls."""
+        backend = self._backend_with_key()
+
+        with patch(
+            "Modules.telemetry.urlopen", side_effect=self._http_error(code)
+        ) as mock_urlopen:
+            result = backend.send_batch(
+                [{"event": "app_launched", "properties": {"distinct_id": "x"}}]
+            )
+            assert result is SendResult.PERMANENT_FAILURE
+            assert backend.transmission_disabled is True
+
+            # Every subsequent attempt short-circuits without network access
+            again = backend.send_batch([{"event": "app_launched"}])
+            assert again is SendResult.PERMANENT_FAILURE
+            assert mock_urlopen.call_count == 1
+
+    @pytest.mark.parametrize("code", [429, 500, 502, 503, 504])
+    def test_429_and_5xx_are_retryable(self, code):
+        """429 rate limiting and 5xx stay retryable; backend keeps trying."""
+        backend = self._backend_with_key()
+
+        with patch(
+            "Modules.telemetry.urlopen", side_effect=self._http_error(code)
+        ) as mock_urlopen:
+            assert (
+                backend.send_batch([{"event": "app_launched"}])
+                is SendResult.RETRYABLE_FAILURE
+            )
+            assert backend.transmission_disabled is False
+
+            # Retries are allowed for transient statuses
+            assert (
+                backend.send_batch([{"event": "app_launched"}])
+                is SendResult.RETRYABLE_FAILURE
+            )
+            assert mock_urlopen.call_count == 2
+
+    def test_network_error_is_retryable(self):
+        from urllib.error import URLError
+
+        backend = self._backend_with_key()
+        with patch(
+            "Modules.telemetry.urlopen", side_effect=URLError("connection refused")
+        ):
+            assert (
+                backend.send_batch([{"event": "app_launched"}])
+                is SendResult.RETRYABLE_FAILURE
+            )
+        assert backend.transmission_disabled is False
+
+    def test_timeout_is_retryable(self):
+        backend = self._backend_with_key()
+        with patch("Modules.telemetry.urlopen", side_effect=TimeoutError("timed out")):
+            assert (
+                backend.send_batch([{"event": "app_launched"}])
+                is SendResult.RETRYABLE_FAILURE
+            )
+        assert backend.transmission_disabled is False
+
+    def test_unexpected_exception_is_retryable_and_never_raises(self):
+        backend = self._backend_with_key()
+        with patch(
+            "Modules.telemetry.urlopen", side_effect=Exception("something weird")
+        ):
+            assert (
+                backend.send_batch([{"event": "app_launched"}])
+                is SendResult.RETRYABLE_FAILURE
+            )
+        assert backend.transmission_disabled is False
+
+    def test_retryable_failure_can_recover_on_next_flush(self):
+        """After a transient failure a later successful send returns SUCCESS."""
+        backend = self._backend_with_key()
+        with patch("Modules.telemetry.urlopen", side_effect=self._http_error(503)):
+            assert (
+                backend.send_batch([{"event": "app_launched"}])
+                is SendResult.RETRYABLE_FAILURE
+            )
+        with patch(
+            "Modules.telemetry.urlopen", return_value=self._ok_response(200)
+        ):
+            assert (
+                backend.send_batch([{"event": "app_launched"}]) is SendResult.SUCCESS
+            )
+        assert backend.transmission_disabled is False
+
+    def test_permanent_failure_stops_flush_but_keeps_queue(
+        self, consented_client, monkeypatch
+    ):
+        """Client side: a 4xx keeps events queued but stops further sends."""
+        monkeypatch.setattr("Modules.telemetry.QT_AVAILABLE", False)  # sync path
+
+        consented_client.track("app_launched")
+
+        mock_backend = MagicMock()
+        mock_backend.send_batch.return_value = SendResult.PERMANENT_FAILURE
+        consented_client._backend = mock_backend
+
+        consented_client.flush()
+
+        # Events kept (a future build with a corrected key can deliver them)
+        assert consented_client._event_store.count() == 1
+        assert consented_client._transmission_disabled is True
+
+        # Subsequent flushes don't even ask the backend
+        consented_client.flush()
+        consented_client.flush()
+        mock_backend.send_batch.assert_called_once()
+
+    def test_reconsent_rearms_transmission(self, consented_client, monkeypatch):
+        """Re-enabling analytics clears the permanent-failure latch."""
+        monkeypatch.setattr("Modules.telemetry.QT_AVAILABLE", False)
+
+        consented_client.track("app_launched")
+
+        mock_backend = MagicMock()
+        mock_backend.send_batch.return_value = SendResult.PERMANENT_FAILURE
+        consented_client._backend = mock_backend
+
+        consented_client.flush()
+        assert consented_client._transmission_disabled is True
+
+        consented_client.enable()
+        assert consented_client._transmission_disabled is False
+        mock_backend.reset_transmission_disabled.assert_called_once()
+
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
+        consented_client.flush()
+        assert consented_client._event_store.count() == 0
+
+
+# ─── LEGACY SCHEMA MIGRATION TESTS ───────────────────────────────────────────
+
+class TestEventStoreMigration:
+    """Legacy `event_id` queue schemas must keep working after the `uuid`
+    migration: no data loss, no crash, and old payloads gain the PostHog
+    `uuid` field on the way out."""
+
+    LEGACY_UUID = "11111111-2222-4333-8444-555555555555"
+
+    def _create_legacy_db(self, db_path):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE pending_events (
+                event_id TEXT PRIMARY KEY,
+                event_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        legacy_event = {
+            "event": "app_launched",
+            "event_id": self.LEGACY_UUID,
+            "timestamp": "2026-08-01T10:00:00+00:00",
+            "properties": {
+                "distinct_id": "legacy-install",
+                "$process_person_profile": False,
+                "app_version": "1.3.0",
+                "os_family": "windows",
+                "telemetry_schema": 1,
+            },
+        }
+        conn.execute(
+            "INSERT INTO pending_events VALUES (?, ?, ?)",
+            (self.LEGACY_UUID, json.dumps(legacy_event), "2026-08-01T10:00:00+00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_legacy_schema_migrated_and_data_preserved(self, tmp_path):
+        from Modules.telemetry import EventStore
+
+        db_path = tmp_path / "telemetry" / "events.db"
+        self._create_legacy_db(db_path)
+
+        store = EventStore(db_path)  # triggers migration
+
+        conn = sqlite3.connect(str(db_path))
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(pending_events)")}
+        conn.close()
+        assert "event_uuid" in columns
+        assert "event_id" not in columns
+
+        # Existing queued event survived the migration
+        assert store.count() == 1
+        pending = store.get_pending_events(10)
+        assert pending[0][0] == self.LEGACY_UUID
+
+        # New events enqueue normally against the migrated schema
+        assert store.enqueue(str(uuid.uuid4()), {"event": "session_started"}) is True
+        assert store.count() == 2
+
+    def test_migration_is_idempotent(self, tmp_path):
+        """Opening the store again after migration is a no-op."""
+        from Modules.telemetry import EventStore
+
+        db_path = tmp_path / "telemetry" / "events.db"
+        self._create_legacy_db(db_path)
+
+        EventStore(db_path)
+        store = EventStore(db_path)  # second open: already migrated
+        assert store.count() == 1
+
+    def test_fresh_database_uses_new_schema(self, tmp_path):
+        from Modules.telemetry import EventStore
+
+        db_path = tmp_path / "telemetry" / "events.db"
+        EventStore(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(pending_events)")}
+        conn.close()
+        assert "event_uuid" in columns
+        assert "event_id" not in columns
+
+    def test_normalize_for_transmission(self):
+        from Modules.telemetry import AnalyticsClient
+
+        legacy = {"event": "app_launched", "event_id": "abc-123"}
+        normalized = AnalyticsClient._normalize_for_transmission(legacy)
+        assert normalized == {"event": "app_launched", "uuid": "abc-123"}
+
+        current = {"event": "app_launched", "uuid": "abc-123"}
+        assert AnalyticsClient._normalize_for_transmission(current) == current
+
+    def test_legacy_payload_normalized_and_delivered_on_flush(
+        self, qsettings, tmp_path, monkeypatch
+    ):
+        """End-to-end: an event queued by an old build is sent with `uuid`
+        and removed from the queue after a successful flush."""
+        from Modules.telemetry import AnalyticsClient
+
+        monkeypatch.setattr("Modules.telemetry.QT_AVAILABLE", False)  # sync path
+
+        db_path = tmp_path / "telemetry" / "events.db"
+        self._create_legacy_db(db_path)
+
+        qsettings.setValue("telemetry/consented", True)
+        qsettings.sync()
+
+        client = AnalyticsClient(qsettings, telemetry_db_path=db_path)
+        mock_backend = MagicMock()
+        mock_backend.send_batch.return_value = SendResult.SUCCESS
+        client._backend = mock_backend
+
+        client.flush()
+
+        sent = mock_backend.send_batch.call_args[0][0]
+        assert len(sent) == 1
+        assert sent[0]["uuid"] == self.LEGACY_UUID  # renamed from event_id
+        assert "event_id" not in sent[0]
+        assert client._event_store.count() == 0

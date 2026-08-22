@@ -19,6 +19,25 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True, scope="session")
+def no_real_posthog_key():
+    """Never transmit real analytics events from the test suite.
+
+    The shipped build carries the production PostHog project ingestion key.
+    Blanking it for the whole test session makes every AnalyticsBackend
+    constructed during tests (including AppController's real analytics
+    client and its shutdown flush) treat transmission as a no-op, so CI can
+    never pollute the production project with test events. Restored after
+    the session.
+    """
+    import Modules.telemetry as telemetry
+
+    original = telemetry.POSTHOG_API_KEY
+    telemetry.POSTHOG_API_KEY = ""
+    yield
+    telemetry.POSTHOG_API_KEY = original
+
+
 def create_legacy_v0_database(path):
     """Build a v0.x-era database: old activities columns plus a `tasks`
     table, exactly like the checked-in legacy copy that predates v1.1."""

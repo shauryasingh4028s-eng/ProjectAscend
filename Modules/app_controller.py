@@ -5,6 +5,7 @@ from Modules.achievement_manager import AchievementManager
 from Modules.xp_manager import XPManager
 from Modules.streak_manager import StreakManager
 from Modules.telemetry import AnalyticsClient
+from Modules.version import APP_VERSION
 from Database.database import Database
 from Dialogs.daily_planner import DailyPlanner
 from Modules.dashboard_v2 import Dashboard
@@ -15,9 +16,6 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from UI.theme.design_system import ThemeManager
 from UI.components.app_shell import AppShell
-
-# The current build version, used by telemetry to detect version changes.
-_APP_VERSION = "1.4.0"
 
 # XP required to advance one level, matching XPManager.get_level().
 XP_PER_LEVEL = 100
@@ -256,13 +254,14 @@ class AppController:
             # Track first_launch or app_launched (consent-gated)
             self.telemetry.track_first_launch_or_app_launched()
 
-            # Detect version updates
+            # Detect version updates (APP_VERSION comes from Modules.version,
+            # the single authoritative source)
             previous_version = self.app_settings.value(
                 "telemetry/last_known_version", "", type=str
             )
-            if previous_version and previous_version != _APP_VERSION:
+            if previous_version and previous_version != APP_VERSION:
                 self._track("app_version_updated")
-            self.app_settings.setValue("telemetry/last_known_version", _APP_VERSION)
+            self.app_settings.setValue("telemetry/last_known_version", APP_VERSION)
             self.app_settings.sync()
 
             # Start periodic flush (every 5 minutes)
