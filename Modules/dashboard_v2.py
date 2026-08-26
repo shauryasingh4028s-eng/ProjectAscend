@@ -56,6 +56,7 @@ class DashboardV2(QWidget):
         self.xp_animation = None
         self._previous_xp_total = self.database.get_total_xp_setting()
         self._previous_goal_completed = False
+        self._progress_animated = False
 
         self.icon_factory = IconFactory(self)
         self.button_factory = ButtonFactory(self.icon_factory)
@@ -114,7 +115,35 @@ class DashboardV2(QWidget):
     def create_header(self):
         self.settings_button = self.button_factory.secondary("Settings", "fa5s.cog")
         self.settings_button.clicked.connect(self.open_settings_dialog)
-        return HeroCard(self.settings_button, self.get_greeting())
+        self.hero_card = HeroCard(self.settings_button, self.get_greeting())
+        self.animate_greeting()
+        return self.hero_card
+
+    def animate_greeting(self):
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        from PySide6.QtCore import QPropertyAnimation
+        from UI.theme.motion_utils import MotionUtils
+        from datetime import date
+
+        settings = QSettings("ProjectAscend", "ProjectAscend")
+        last_date = settings.value("dashboard/last_greeting_date", "", type=str)
+        current_date = date.today().isoformat()
+
+        if last_date != current_date:
+            settings.setValue("dashboard/last_greeting_date", current_date)
+            settings.sync()
+
+            if not MotionUtils.reduced_motion_enabled():
+                self.greeting_effect = QGraphicsOpacityEffect(self.hero_card.greeting_label)
+                self.greeting_effect.setOpacity(0.0)
+                self.hero_card.greeting_label.setGraphicsEffect(self.greeting_effect)
+
+                self.greeting_animation = QPropertyAnimation(self.greeting_effect, b"opacity")
+                self.greeting_animation.setDuration(150)
+                self.greeting_animation.setStartValue(0.0)
+                self.greeting_animation.setEndValue(1.0)
+                self.greeting_animation.start()
 
     def create_progress_cards(self):
         layout = QHBoxLayout()
@@ -173,6 +202,9 @@ class DashboardV2(QWidget):
         self.activity_section = ActivitySection()
         self.activity_section.activity_selected.connect(self.select_activity_by_id)
         self.activity_section.activity_double_clicked.connect(self.start_activity_by_id)
+        self.activity_section.activity_toggled.connect(
+            self.toggle_activity_by_id
+        )
         self.activity_section.activity_menu_requested.connect(
             self.show_activity_menu_for_id
         )
@@ -244,6 +276,49 @@ class DashboardV2(QWidget):
         self.activity_section.select_activity(activity_id)
         self.start_selected_activity()
 
+
+    def toggle_activity_by_id(self, activity_id):
+        activity = None
+        for act in self.activities:
+            if act.id == activity_id:
+                activity = act
+                break
+
+        if activity is None:
+            return
+
+        activity.completed = not activity.completed
+
+        card = self.activity_section.cards.get(activity_id)
+        if card is not None:
+            card.status_icon.set_completed(activity.completed)
+            badge_text = "Completed" if activity.completed else "Planned"
+            badge = card.findChild(QLabel, "CompletedBadge") or card.findChild(QLabel, "PlannedBadge")
+            if badge:
+                badge.setText(badge_text)
+                badge.setObjectName("CompletedBadge" if activity.completed else "PlannedBadge")
+                badge.style().unpolish(badge)
+                badge.style().polish(badge)
+
+        self.database.update_activity(activity)
+        self.update_progress_summary()
+        self.update_player_progress()
+
+        if activity.completed:
+            if self.app_controller is not None:
+                self.app_controller.xp_manager.award_activity_completion(activity.id)
+                self.app_controller.notify_activity_data_changed()
+            elif XPManager is not None:
+                XPManager(self.database).award_activity_completion(activity.id)
+            self.task_completed.emit()
+
+            if self.all_today_activities_complete():
+                QMessageBox.information(
+                    self,
+                    "Congratulations!",
+                    "You completed every activity today.\n\nExcellent work.",
+                )
+
     def get_activity_list_text(self, activity):
         status = "Completed" if activity.completed else "Planned"
         return (
@@ -290,6 +365,8 @@ class DashboardV2(QWidget):
         goal_is_completed = (study_minutes >= daily_goal and daily_goal > 0)
         if goal_is_completed and not self._previous_goal_completed:
             self.daily_goal_completed.emit()
+            if hasattr(self.daily_goal_label, 'play_celebration'):
+                self.daily_goal_label.play_celebration()
         self._previous_goal_completed = goal_is_completed
 
         # Check if XP changed (emit signal only when total changes)
@@ -608,9 +685,27 @@ class DashboardV2(QWidget):
             )
 
     def animate_progress_bar(self, progress_bar, target_value):
+        from UI.theme.motion_utils import MotionUtils
+        from PySide6.QtCore import QEasingCurve
+
+        if MotionUtils.reduced_motion_enabled():
+            progress_bar.setValue(target_value)
+            self._progress_animated = True
+            return
+
+        if self.progress_animation and self.progress_animation.state() == QPropertyAnimation.Running:
+            self.progress_animation.stop()
+
         self.progress_animation = QPropertyAnimation(progress_bar, b"value")
-        self.progress_animation.setDuration(220)
-        self.progress_animation.setStartValue(progress_bar.value())
+        self.progress_animation.setDuration(300)
+        self.progress_animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        if not self._progress_animated:
+            self.progress_animation.setStartValue(0)
+            self._progress_animated = True
+        else:
+            self.progress_animation.setStartValue(progress_bar.value())
+
         self.progress_animation.setEndValue(target_value)
         self.progress_animation.start()
 

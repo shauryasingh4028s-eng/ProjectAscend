@@ -136,6 +136,7 @@ class AppController:
         )
 
         self.shell.page_changed.connect(self.handle_page_changed)
+        self.xp_manager.level_changed.connect(self.handle_level_changed)
 
     def refresh_sidebar_progress(self):
         """Push already-calculated XP values into the sidebar summary."""
@@ -190,6 +191,19 @@ class AppController:
         self.dashboard.update_daily_goal_label()
         self.dashboard.update_progress_summary()
         self.notify_activity_data_changed()
+
+
+    def handle_level_changed(self, new_level, title):
+        from UI.components.toast_notification import ToastNotification
+        if hasattr(self, '_active_toast') and self._active_toast:
+            try:
+                self._active_toast.deleteLater()
+            except:
+                pass
+
+        toast = ToastNotification(self.shell, title, "Congratulations, you've leveled up!")
+        self._active_toast = toast
+        toast.show_toast()
 
     def show_dashboard(self):
         # Show the shell on the dashboard page.

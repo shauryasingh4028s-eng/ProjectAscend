@@ -107,6 +107,24 @@ class FocusMode(QWidget):
         self.icon_factory = IconFactory(self)
         self.button_factory = ButtonFactory(self.icon_factory)
 
+        from PySide6.QtGui import QColor
+        from PySide6.QtCore import QVariantAnimation, Property
+
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        self._bg_color = QColor(0, 0, 0, 0)
+        self._bg_animation = QVariantAnimation(self)
+        self._bg_animation.setDuration(300)
+        self._bg_animation.valueChanged.connect(self._set_bg_color)
+
+        from UI.theme.motion_utils import MotionUtils
+        if MotionUtils.reduced_motion_enabled():
+            self._bg_color = QColor(Colors.BACKGROUND)
+        else:
+            self._bg_animation.setStartValue(QColor(0, 0, 0, 0))
+            self._bg_animation.setEndValue(QColor(Colors.BACKGROUND))
+            self._bg_animation.start()
+
         # Configure the Focus Mode window.
         self.setWindowTitle("Project Ascend Focus Mode")
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
@@ -251,6 +269,16 @@ class FocusMode(QWidget):
             self.close()
         else:
             super().keyPressEvent(event)
+
+    def _set_bg_color(self, color):
+        self._bg_color = color
+        self.update()
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self._bg_color)
+        super().paintEvent(event)
 
     def closeEvent(self, event):
         # Disconnect signals so closed Focus Mode windows do not keep updating.

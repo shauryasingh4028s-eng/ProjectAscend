@@ -1,5 +1,10 @@
-class XPManager:
+from PySide6.QtCore import QObject, Signal
+
+class XPManager(QObject):
+    level_changed = Signal(int, str)
+
     def __init__(self, database):
+        super().__init__()
         # Store the shared database connection.
         self.database = database
 
@@ -16,9 +21,13 @@ class XPManager:
     def add_xp(self, amount):
         # Increase total XP permanently.
         total_xp = self.get_total_xp()
+        old_level = self.get_level()
         total_xp += amount
-
         self.database.set_setting("total_xp", total_xp)
+        new_level = self.get_level()
+
+        if new_level > old_level:
+            self.level_changed.emit(new_level, f"Level {new_level}")
 
         return total_xp
 

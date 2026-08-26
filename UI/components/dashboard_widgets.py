@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal, QVariantAnimation
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -170,10 +170,10 @@ class HeroCard(CardFrame):
         text_layout = QVBoxLayout()
         text_layout.setSpacing(1)
 
-        greeting_label = make_label(f"{greeting}, Ascender", "Greeting")
+        self.greeting_label = make_label(f"{greeting}, Ascender", "Greeting")
         quote = make_label("Stay focused. Keep ascending.", "MutedText")
 
-        text_layout.addWidget(greeting_label)
+        text_layout.addWidget(self.greeting_label)
         text_layout.addWidget(quote)
 
         date_layout = QVBoxLayout()
@@ -205,7 +205,7 @@ class ProgressCard(CardFrame):
         self.setMinimumHeight(190)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
-        self.daily_goal_label = QLabel()
+        self.daily_goal_label = AnimatedGoalBadge()
         self.progress_bar = QProgressBar()
         self.study_time_label = QLabel("0h 0m")
         self.completed_total_label = QLabel("0 / 0")
@@ -390,6 +390,7 @@ class ActivityCard(CardFrame):
     selected = Signal(int)
     menu_requested = Signal(int, object)
     double_clicked = Signal(int)
+    toggled = Signal(int)
 
     def __init__(self, activity, icon_factory, overflow_button):
         super().__init__("ActivityCard", shadow=False)
@@ -407,11 +408,9 @@ class ActivityCard(CardFrame):
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setSpacing(12)
 
-        icon_name = "fa5s.check-circle" if self.activity.completed else "fa5s.circle"
-        status_icon = QLabel()
-        status_icon.setFixedSize(24, 24)
-        status_icon.setAlignment(Qt.AlignCenter)
-        status_icon.setPixmap(self.icon_factory.get(icon_name).pixmap(22, 22))
+        self.status_icon = AnimatedStatusIcon(self.icon_factory, self.activity.completed)
+        self.status_icon.setCursor(Qt.PointingHandCursor)
+        self.status_icon.mousePressEvent = self.toggle_completed
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(8)
@@ -455,7 +454,7 @@ class ActivityCard(CardFrame):
 
         self.overflow_button.clicked.connect(self.emit_menu_request)
 
-        layout.addWidget(status_icon)
+        layout.addWidget(self.status_icon)
         layout.addLayout(text_layout, 4)
         layout.addStretch(1)
         layout.addLayout(time_layout, 2)
@@ -474,6 +473,10 @@ class ActivityCard(CardFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def toggle_completed(self, event):
+        if event.button() == Qt.LeftButton:
+            self.toggled.emit(self.activity.id)
+
     def eventFilter(self, watched, event):
         if watched is self and event.type() == QEvent.MouseButtonPress:
             self.selected.emit(self.activity.id)
@@ -484,6 +487,132 @@ class ActivityCard(CardFrame):
             return True
 
         return super().eventFilter(watched, event)
+
+
+class AnimatedStatusIcon(QLabel):
+    def __init__(self, icon_factory, completed, parent=None):
+        super().__init__(parent)
+        self.icon_factory = icon_factory
+        self.completed = completed
+        self.setFixedSize(24, 24)
+        self.setAlignment(Qt.AlignCenter)
+        self._scale = 1.0
+
+        self.animation = QVariantAnimation(self)
+        self.animation.setDuration(150)
+
+        # 1.0 -> 0.85 -> 1.0
+        self.animation.setKeyValueAt(0.0, 1.0)
+        self.animation.setKeyValueAt(0.5, 0.85)
+        self.animation.setKeyValueAt(1.0, 1.0)
+
+        self.animation.valueChanged.connect(self._update_scale)
+        self.animation.finished.connect(self._on_finished)
+
+        self.update_icon(force=True)
+
+    def _update_scale(self, value):
+        self._scale = value
+        self.update()
+
+    def _on_finished(self):
+        self._scale = 1.0
+        self.update()
+
+    def update_icon(self, force=False):
+        icon_name = "fa5s.check-circle" if self.completed else "fa5s.circle"
+        self._pixmap = self.icon_factory.get(icon_name).pixmap(22, 22)
+        if force:
+            self.update()
+
+    def set_completed(self, completed):
+        if self.completed == completed:
+            return
+
+        self.completed = completed
+
+        from UI.theme.motion_utils import MotionUtils
+        if MotionUtils.reduced_motion_enabled():
+            self.update_icon(force=True)
+            return
+
+        if self.animation.state() == QVariantAnimation.Running:
+            self.animation.stop()
+
+        self.update_icon(force=False)
+        self.animation.start()
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter, QTransform
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        center_x = self.width() / 2.0
+        center_y = self.height() / 2.0
+
+        transform = QTransform()
+        transform.translate(center_x, center_y)
+        transform.scale(self._scale, self._scale)
+        transform.translate(-center_x, -center_y)
+
+        painter.setTransform(transform)
+        if hasattr(self, '_pixmap') and not self._pixmap.isNull():
+            x = (self.width() - self._pixmap.width()) // 2
+            y = (self.height() - self._pixmap.height()) // 2
+            painter.drawPixmap(x, y, self._pixmap)
+
+class AnimatedGoalBadge(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._scale = 1.0
+
+        self.animation = QVariantAnimation(self)
+        self.animation.setDuration(600)
+
+        from PySide6.QtCore import QEasingCurve
+        self.animation.setEasingCurve(QEasingCurve.OutBack)
+        self.animation.setStartValue(1.0)
+        self.animation.setKeyValueAt(0.5, 1.15)
+        self.animation.setEndValue(1.0)
+
+        self.animation.valueChanged.connect(self._update_scale)
+        self.animation.finished.connect(self._on_finished)
+
+    def _update_scale(self, value):
+        self._scale = value
+        self.update()
+
+    def _on_finished(self):
+        self._scale = 1.0
+        self.update()
+
+    def play_celebration(self):
+        from UI.theme.motion_utils import MotionUtils
+        if MotionUtils.reduced_motion_enabled():
+            return
+
+        if self.animation.state() == QVariantAnimation.Running:
+            self.animation.stop()
+
+        self.animation.start()
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter, QTransform
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        center_x = self.width() / 2.0
+        center_y = self.height() / 2.0
+
+        transform = QTransform()
+        transform.translate(center_x, center_y)
+        transform.scale(self._scale, self._scale)
+        transform.translate(-center_x, -center_y)
+
+        painter.setTransform(transform)
+        super().paintEvent(event)
 
 
 class EmptyActivityState(QWidget):
@@ -527,6 +656,8 @@ class EmptyActivityState(QWidget):
 class ActivitySection(CardFrame):
     activity_selected = Signal(int)
     activity_double_clicked = Signal(int)
+    activity_toggled = Signal(int)
+    toggled = Signal(int)
     activity_menu_requested = Signal(int, object)
 
     def __init__(self):
@@ -583,6 +714,7 @@ class ActivitySection(CardFrame):
         self.cards[activity_id] = card
         card.selected.connect(self.select_activity)
         card.double_clicked.connect(self.activity_double_clicked.emit)
+        card.toggled.connect(self.activity_toggled.emit)
         card.menu_requested.connect(self.activity_menu_requested.emit)
         self.content_layout.addWidget(card)
         self.content_layout.addItem(stretch_item)
