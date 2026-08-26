@@ -98,7 +98,13 @@ class ToastNotification(QFrame):
         self.title_label.setText(title)
         self.message_label.setText(message)
         self.adjustSize()
-        self.setFixedWidth(max(280, self.sizeHint().width()))
+        parent = self.parentWidget()
+        if parent is not None:
+            toast_width = max(280, self.sizeHint().width())
+            self.setFixedWidth(toast_width)
+            target_x = (parent.width() - toast_width) // 2
+            self.move(target_x, 20)
+            self.opacity_effect.setOpacity(1.0)
 
     def restart_dismiss_timer(self):
         self.dismiss_timer.stop()
@@ -122,6 +128,7 @@ class ToastNotification(QFrame):
         self.raise_()
 
         if is_reduced_motion_enabled():
+            self.move(target_x, target_y)
             self.opacity_effect.setOpacity(1.0)
             self.dismiss_timer.start(3000)
             return
@@ -143,6 +150,11 @@ class ToastNotification(QFrame):
         self.dismiss_timer.start(3400)
 
     def dismiss(self):
+        if self.slide_anim is not None and self.slide_anim.state() == QPropertyAnimation.Running:
+            self.slide_anim.stop()
+        if self.fade_anim is not None and self.fade_anim.state() == QPropertyAnimation.Running:
+            self.fade_anim.stop()
+
         if is_reduced_motion_enabled() or self.parentWidget() is None:
             self._cleanup()
             return
@@ -168,6 +180,10 @@ class ToastNotification(QFrame):
         self.fade_anim.start()
 
     def _cleanup(self):
+        if self.slide_anim is not None and self.slide_anim.state() == QPropertyAnimation.Running:
+            self.slide_anim.stop()
+        if self.fade_anim is not None and self.fade_anim.state() == QPropertyAnimation.Running:
+            self.fade_anim.stop()
         if ToastNotification._active_toast is self:
             ToastNotification._active_toast = None
         self.deleteLater()

@@ -201,7 +201,12 @@ class HeroCard(CardFrame):
 
     def animate_greeting(self):
         """DASH-GREET-01: Fade in ONLY the greeting label once per calendar day."""
+        if hasattr(self, "greeting_anim") and self.greeting_anim is not None and self.greeting_anim.state() == QPropertyAnimation.Running:
+            self.greeting_anim.stop()
+
         if is_reduced_motion_enabled():
+            if self.greeting_label.graphicsEffect() is not None:
+                self.greeting_label.setGraphicsEffect(None)
             return
 
         opacity_effect = QGraphicsOpacityEffect(self.greeting_label)
@@ -296,11 +301,15 @@ class ProgressCard(CardFrame):
 
     def animate_goal_completion(self):
         """GOAL-COMPLETE-01: Target ONLY the daily goal badge/icon (1.0 -> 1.15 -> 1.0 over ~600ms OutBack)."""
-        if is_reduced_motion_enabled():
-            return
+        if hasattr(self, "goal_anim") and self.goal_anim is not None and self.goal_anim.state() == QVariantAnimation.Running:
+            self.goal_anim.stop()
 
         target_widget = self.goal_badge
         base_font_size = 14
+
+        if is_reduced_motion_enabled():
+            target_widget.setStyleSheet(f"font-size: {base_font_size}px;")
+            return
 
         self.goal_anim = QVariantAnimation(self)
         self.goal_anim.setDuration(600)
@@ -312,7 +321,11 @@ class ProgressCard(CardFrame):
         def update_scale(factor):
             target_widget.setStyleSheet(f"font-size: {int(base_font_size * factor)}px;")
 
+        def restore_scale():
+            target_widget.setStyleSheet(f"font-size: {base_font_size}px;")
+
         self.goal_anim.valueChanged.connect(update_scale)
+        self.goal_anim.finished.connect(restore_scale)
         self.goal_anim.start()
 
     def refresh_semantic_icons(self):
@@ -508,11 +521,13 @@ class ActivityCard(CardFrame):
 
     def animate_check_icon(self):
         """TASK-CHECK-01: Animate local checkmark icon (1.0 -> 0.85 -> 1.0, ~150ms). Zero layout shift."""
-        if self.icon_anim is not None and self.icon_anim.state() == QVariantAnimation.Running:
+        if hasattr(self, "icon_anim") and self.icon_anim is not None and self.icon_anim.state() == QVariantAnimation.Running:
             self.icon_anim.stop()
 
+        base_icon = self.icon_factory.get(self.status_icon_name)
+
         if is_reduced_motion_enabled():
-            self.status_icon.setPixmap(self.icon_factory.get(self.status_icon_name).pixmap(22, 22))
+            self.status_icon.setPixmap(base_icon.pixmap(22, 22))
             return
 
         self.icon_anim = QVariantAnimation(self)
@@ -522,13 +537,15 @@ class ActivityCard(CardFrame):
         self.icon_anim.setEndValue(1.0)
         self.icon_anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        base_icon = self.icon_factory.get(self.status_icon_name)
-
         def update_scale(factor):
             size = max(10, int(22 * factor))
             self.status_icon.setPixmap(base_icon.pixmap(size, size))
 
+        def restore_scale():
+            self.status_icon.setPixmap(base_icon.pixmap(22, 22))
+
         self.icon_anim.valueChanged.connect(update_scale)
+        self.icon_anim.finished.connect(restore_scale)
         self.icon_anim.start()
 
     def emit_menu_request(self):

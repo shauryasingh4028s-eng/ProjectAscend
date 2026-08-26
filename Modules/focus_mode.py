@@ -291,4 +291,39 @@ class FocusMode(QWidget):
         except TypeError:
             pass
 
+        # FOCUS-ENTER-01: Animate exit background color transition (~300ms) unless reduced motion is active or already animated.
+        if not getattr(self, "_exit_animated", False) and not is_reduced_motion_enabled():
+            event.ignore()
+            self.animate_exit_transition()
+            return
+
         super().closeEvent(event)
+
+    def animate_exit_transition(self):
+        """FOCUS-ENTER-01: 300ms exit background color transition before window destruction."""
+        if getattr(self, "_exiting", False):
+            return
+
+        self._exiting = True
+
+        if hasattr(self, "bg_anim") and self.bg_anim is not None and self.bg_anim.state() == QVariantAnimation.Running:
+            self.bg_anim.stop()
+
+        self.exit_anim = QVariantAnimation(self)
+        self.exit_anim.setDuration(300)
+        self.exit_anim.setStartValue(QColor(Colors.BACKGROUND))
+        self.exit_anim.setEndValue(QColor("#030407"))
+        self.exit_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def update_bg(color):
+            palette = self.palette()
+            palette.setColor(self.backgroundRole(), color)
+            self.setPalette(palette)
+
+        def finalize_close():
+            self._exit_animated = True
+            self.close()
+
+        self.exit_anim.valueChanged.connect(update_bg)
+        self.exit_anim.finished.connect(finalize_close)
+        self.exit_anim.start()

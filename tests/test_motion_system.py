@@ -1,5 +1,6 @@
 """Test suite for Project Ascend motion system and reduced motion handling."""
 
+from datetime import date
 import pytest
 from PySide6.QtCore import QSettings
 from UI.theme.motion_utils import is_reduced_motion_enabled, set_reduced_motion_enabled
@@ -39,11 +40,27 @@ def test_dashboard_greeting_date_gating(qapp, database):
     dashboard = DashboardV2(database)
     app_settings = QSettings("ProjectAscend", "ProjectAscend")
 
-    # Set last_greeting_date to today
-    from datetime import date
     today_str = date.today().isoformat()
     app_settings.setValue("last_greeting_date", today_str)
 
     # Calling check_daily_greeting when date is today should not overwrite last_greeting_date
     dashboard.check_daily_greeting()
     assert app_settings.value("last_greeting_date", "", type=str) == today_str
+
+
+def test_focus_mode_enter_and_exit_transitions(qapp, database):
+    from Modules.activity import Activity
+    from Modules.dashboard_v2 import DashboardV2
+    from Modules.focus_mode import FocusMode
+    from Modules.session import SessionEngine
+
+    activity = Activity(id=1, name="Test Focus", activity_type="Study", estimated_minutes=30, date=date.today().isoformat())
+    dashboard = DashboardV2(database)
+    engine = SessionEngine(database)
+
+    # Reduced motion active: exit transition closes directly
+    set_reduced_motion_enabled(True)
+    focus = FocusMode(activity, engine, dashboard)
+    assert focus is not None
+    focus.close()
+    set_reduced_motion_enabled(False)
