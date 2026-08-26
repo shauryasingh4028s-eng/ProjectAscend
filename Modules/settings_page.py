@@ -159,6 +159,22 @@ class SettingsPage(QWidget):
         self.status_label.setVisible(False)
         goal_section.add_row(self.status_label)
 
+        motion_section = SettingsSection(
+            "Accessibility & Motion",
+            "Control UI motion effects and transitions.",
+        )
+        motion_row = QWidget()
+        motion_layout = QHBoxLayout(motion_row)
+        motion_layout.setContentsMargins(0, Spacing.XS, 0, 0)
+        motion_layout.setSpacing(Spacing.MD)
+        self.reduced_motion_checkbox = QCheckBox(
+            "Reduce motion (disable UI animations)"
+        )
+        self.reduced_motion_checkbox.stateChanged.connect(self._on_reduced_motion_toggled)
+        motion_layout.addWidget(self.reduced_motion_checkbox)
+        motion_layout.addStretch()
+        motion_section.add_row(motion_row)
+
         about_section = SettingsSection(
             "About",
             "Project Ascend — Focus. Progress. Ascend.\n"
@@ -194,6 +210,7 @@ class SettingsPage(QWidget):
 
         layout.addWidget(profile_section)
         layout.addWidget(theme_section)
+        layout.addWidget(motion_section)
         layout.addWidget(goal_section)
         layout.addWidget(privacy_section)
         layout.addWidget(about_section)
@@ -209,6 +226,12 @@ class SettingsPage(QWidget):
         theme = self.app_settings.value("theme", "dark", type=str)
         index = self.theme_combo.findData(theme)
         self.theme_combo.setCurrentIndex(index if index >= 0 else 0)
+
+        from UI.theme.motion_utils import is_reduced_motion_enabled
+        self.reduced_motion_checkbox.blockSignals(True)
+        self.reduced_motion_checkbox.setChecked(is_reduced_motion_enabled())
+        self.reduced_motion_checkbox.blockSignals(False)
+
         # Load analytics consent state (defaults to True for fresh installation)
         consented = self.app_settings.value("telemetry/consented", True, type=bool)
         self.analytics_checkbox.blockSignals(True)
@@ -216,6 +239,10 @@ class SettingsPage(QWidget):
         self.analytics_checkbox.blockSignals(False)
         self._update_analytics_status(consented)
         self.update_preview()
+
+    def _on_reduced_motion_toggled(self, state):
+        from UI.theme.motion_utils import set_reduced_motion_enabled
+        set_reduced_motion_enabled(state == Qt.Checked or state == 2)
 
     def save_name(self):
         name = self.name_input.text().strip() or "Ascender"

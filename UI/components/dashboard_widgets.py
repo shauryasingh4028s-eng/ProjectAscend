@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from Modules.date_utils import format_display_date
 from UI.theme.design_system import Colors, ThemeManager
+from UI.theme.motion_utils import is_reduced_motion_enabled
 
 
 class CardFrame(QFrame):
@@ -170,10 +172,10 @@ class HeroCard(CardFrame):
         text_layout = QVBoxLayout()
         text_layout.setSpacing(1)
 
-        greeting_label = make_label(f"{greeting}, Ascender", "Greeting")
+        self.greeting_label = make_label(f"{greeting}, Ascender", "Greeting")
         quote = make_label("Stay focused. Keep ascending.", "MutedText")
 
-        text_layout.addWidget(greeting_label)
+        text_layout.addWidget(self.greeting_label)
         text_layout.addWidget(quote)
 
         date_layout = QVBoxLayout()
@@ -196,6 +198,22 @@ class HeroCard(CardFrame):
         layout.addStretch()
         layout.addLayout(date_layout)
         self.setLayout(layout)
+
+    def animate_greeting(self):
+        """DASH-GREET-01: Fade in ONLY the greeting label once per calendar day."""
+        if is_reduced_motion_enabled():
+            return
+
+        opacity_effect = QGraphicsOpacityEffect(self.greeting_label)
+        self.greeting_label.setGraphicsEffect(opacity_effect)
+        opacity_effect.setOpacity(0.0)
+
+        self.greeting_anim = QPropertyAnimation(opacity_effect, b"opacity")
+        self.greeting_anim.setDuration(150)
+        self.greeting_anim.setStartValue(0.0)
+        self.greeting_anim.setEndValue(1.0)
+        self.greeting_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.greeting_anim.start()
 
 
 class ProgressCard(CardFrame):
@@ -222,10 +240,12 @@ class ProgressCard(CardFrame):
         header_layout.setSpacing(12)
 
         title = make_label("Today's Progress", "SectionTitle")
+        self.goal_badge = QLabel("🎯")
         self.daily_goal_label.setObjectName("MutedText")
         self.daily_goal_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         header_layout.addWidget(title)
+        header_layout.addWidget(self.goal_badge)
         header_layout.addStretch()
         header_layout.addWidget(self.daily_goal_label)
 
@@ -273,6 +293,27 @@ class ProgressCard(CardFrame):
         layout.addWidget(self.progress_bar)
         layout.addLayout(stats_grid)
         self.setLayout(layout)
+
+    def animate_goal_completion(self):
+        """GOAL-COMPLETE-01: Target ONLY the daily goal badge/icon (1.0 -> 1.15 -> 1.0 over ~600ms OutBack)."""
+        if is_reduced_motion_enabled():
+            return
+
+        target_widget = self.goal_badge
+        base_font_size = 14
+
+        self.goal_anim = QVariantAnimation(self)
+        self.goal_anim.setDuration(600)
+        self.goal_anim.setStartValue(1.0)
+        self.goal_anim.setKeyValueAt(0.5, 1.15)
+        self.goal_anim.setEndValue(1.0)
+        self.goal_anim.setEasingCurve(QEasingCurve.OutBack)
+
+        def update_scale(factor):
+            target_widget.setStyleSheet(f"font-size: {int(base_font_size * factor)}px;")
+
+        self.goal_anim.valueChanged.connect(update_scale)
+        self.goal_anim.start()
 
     def refresh_semantic_icons(self):
         """Re-render the metric icons with the active theme's colours."""
@@ -408,10 +449,12 @@ class ActivityCard(CardFrame):
         layout.setSpacing(12)
 
         icon_name = "fa5s.check-circle" if self.activity.completed else "fa5s.circle"
-        status_icon = QLabel()
-        status_icon.setFixedSize(24, 24)
-        status_icon.setAlignment(Qt.AlignCenter)
-        status_icon.setPixmap(self.icon_factory.get(icon_name).pixmap(22, 22))
+        self.status_icon = QLabel()
+        self.status_icon.setFixedSize(24, 24)
+        self.status_icon.setAlignment(Qt.AlignCenter)
+        self.status_icon_name = icon_name
+        self.status_icon.setPixmap(self.icon_factory.get(icon_name).pixmap(22, 22))
+        self.icon_anim = None
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(8)
@@ -455,13 +498,38 @@ class ActivityCard(CardFrame):
 
         self.overflow_button.clicked.connect(self.emit_menu_request)
 
-        layout.addWidget(status_icon)
+        layout.addWidget(self.status_icon)
         layout.addLayout(text_layout, 4)
         layout.addStretch(1)
         layout.addLayout(time_layout, 2)
         layout.addWidget(completion_badge)
         layout.addWidget(self.overflow_button)
         self.setLayout(layout)
+
+    def animate_check_icon(self):
+        """TASK-CHECK-01: Animate local checkmark icon (1.0 -> 0.85 -> 1.0, ~150ms). Zero layout shift."""
+        if self.icon_anim is not None and self.icon_anim.state() == QVariantAnimation.Running:
+            self.icon_anim.stop()
+
+        if is_reduced_motion_enabled():
+            self.status_icon.setPixmap(self.icon_factory.get(self.status_icon_name).pixmap(22, 22))
+            return
+
+        self.icon_anim = QVariantAnimation(self)
+        self.icon_anim.setDuration(150)
+        self.icon_anim.setStartValue(1.0)
+        self.icon_anim.setKeyValueAt(0.5, 0.85)
+        self.icon_anim.setEndValue(1.0)
+        self.icon_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        base_icon = self.icon_factory.get(self.status_icon_name)
+
+        def update_scale(factor):
+            size = max(10, int(22 * factor))
+            self.status_icon.setPixmap(base_icon.pixmap(size, size))
+
+        self.icon_anim.valueChanged.connect(update_scale)
+        self.icon_anim.start()
 
     def emit_menu_request(self):
         position = self.overflow_button.mapToGlobal(

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from PySide6.QtCore import QPropertyAnimation, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
@@ -29,6 +29,7 @@ from UI.components.dashboard_widgets import (
     ProgressCard,
 )
 from UI.theme.design_system import ButtonFactory, IconFactory, ThemeManager
+from UI.theme.motion_utils import is_reduced_motion_enabled
 
 try:
     from Modules.xp_manager import XPManager
@@ -56,6 +57,8 @@ class DashboardV2(QWidget):
         self.xp_animation = None
         self._previous_xp_total = self.database.get_total_xp_setting()
         self._previous_goal_completed = False
+        self._progress_animated_this_session = False
+        self.hero_card = None
 
         self.icon_factory = IconFactory(self)
         self.button_factory = ButtonFactory(self.icon_factory)
@@ -69,6 +72,7 @@ class DashboardV2(QWidget):
         self.build_ui()
         self.create_shortcuts()
         self.load_today_activities()
+        self.check_daily_greeting()
 
     def header_actions(self):
         """Return the buttons the application shell shows in the page header."""
@@ -83,6 +87,17 @@ class DashboardV2(QWidget):
 
     def apply_styles(self):
         self.setStyleSheet(ThemeManager.dashboard_stylesheet())
+
+    def check_daily_greeting(self):
+        """DASH-GREET-01: Fade in greeting ONLY once per calendar day (handles open overnight)."""
+        app_settings = QSettings("ProjectAscend", "ProjectAscend")
+        last_greeting = app_settings.value("last_greeting_date", "", type=str)
+        today_str = date.today().isoformat()
+        if last_greeting != today_str:
+            app_settings.setValue("last_greeting_date", today_str)
+            app_settings.sync()
+            if self.hero_card is not None:
+                self.hero_card.animate_greeting()
 
     def build_ui(self):
         # Build the action buttons first so the shell header can reuse them.
@@ -114,7 +129,8 @@ class DashboardV2(QWidget):
     def create_header(self):
         self.settings_button = self.button_factory.secondary("Settings", "fa5s.cog")
         self.settings_button.clicked.connect(self.open_settings_dialog)
-        return HeroCard(self.settings_button, self.get_greeting())
+        self.hero_card = HeroCard(self.settings_button, self.get_greeting())
+        return self.hero_card
 
     def create_progress_cards(self):
         layout = QHBoxLayout()
@@ -290,6 +306,8 @@ class DashboardV2(QWidget):
         goal_is_completed = (study_minutes >= daily_goal and daily_goal > 0)
         if goal_is_completed and not self._previous_goal_completed:
             self.daily_goal_completed.emit()
+            if hasattr(self, "progress_card") and self.progress_card is not None:
+                self.progress_card.animate_goal_completion()
         self._previous_goal_completed = goal_is_completed
 
         # Check if XP changed (emit signal only when total changes)
@@ -562,6 +580,11 @@ class DashboardV2(QWidget):
         self.load_today_activities()
         self.task_completed.emit()
 
+        if hasattr(self, "activity_section") and hasattr(self.activity_section, "cards"):
+            card = self.activity_section.cards.get(activity.id)
+            if card is not None and hasattr(card, "animate_check_icon"):
+                card.animate_check_icon()
+
         if self.all_today_activities_complete():
             QMessageBox.information(
                 self,
@@ -608,10 +631,25 @@ class DashboardV2(QWidget):
             )
 
     def animate_progress_bar(self, progress_bar, target_value):
+        """DASH-PROGRESS-01: Animate progress bar 0 -> target_value on session launch, smoothly on updates."""
+        if self.progress_animation is not None and self.progress_animation.state() == QPropertyAnimation.Running:
+            self.progress_animation.stop()
+
+        if is_reduced_motion_enabled():
+            progress_bar.setValue(target_value)
+            return
+
+        if not self._progress_animated_this_session:
+            start_val = 0
+            self._progress_animated_this_session = True
+        else:
+            start_val = progress_bar.value()
+
         self.progress_animation = QPropertyAnimation(progress_bar, b"value")
-        self.progress_animation.setDuration(220)
-        self.progress_animation.setStartValue(progress_bar.value())
+        self.progress_animation.setDuration(300)
+        self.progress_animation.setStartValue(start_val)
         self.progress_animation.setEndValue(target_value)
+        self.progress_animation.setEasingCurve(QEasingCurve.OutCubic)
         self.progress_animation.start()
 
     def animate_xp_bar(self, target_value):

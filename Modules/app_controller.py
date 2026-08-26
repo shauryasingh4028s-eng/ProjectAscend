@@ -81,6 +81,8 @@ class AppController:
             self.app_settings.value("display_name", "Ascender", type=str)
         )
 
+        self._last_known_level = self.xp_manager.get_level()
+
         # ── Anonymous analytics (consent-gated, enabled by default) ──
         # Initialised last so all other components exist before any
         # telemetry call. Every call is non-blocking; failures are
@@ -147,6 +149,21 @@ class AppController:
             xp_into_level,
             XP_PER_LEVEL,
             total_xp,
+        )
+
+        if hasattr(self, "_last_known_level") and self._last_known_level is not None:
+            if level > self._last_known_level:
+                self.show_level_up_toast(level)
+        self._last_known_level = level
+
+    def show_level_up_toast(self, new_level):
+        """LEVEL-UP-01: Display non-blocking toast overlay on genuine level transition."""
+        from UI.components.toast_notification import ToastNotification
+        ToastNotification.show_toast(
+            self.shell,
+            f"LEVEL {new_level} UNLOCKED!",
+            f"Outstanding focus! You reached Level {new_level}.",
+            icon_str="🚀",
         )
 
     def handle_page_changed(self, page_key):

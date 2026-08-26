@@ -4,7 +4,7 @@ Timer behaviour, pause/resume and completion are owned entirely by the
 existing SessionEngine. This module only presents that state.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
@@ -22,6 +22,7 @@ from UI.theme.design_system import (
     Spacing,
     ThemeManager,
 )
+from UI.theme.motion_utils import is_reduced_motion_enabled
 
 
 class CircularTimer(QWidget):
@@ -116,6 +117,7 @@ class FocusMode(QWidget):
         self.apply_styles()
         self.build_ui()
         self.showFullScreen()
+        self.animate_enter_transition()
 
         # Connect to the existing SessionEngine signals.
         self.session_engine.timer_updated.connect(self.update_timer)
@@ -129,6 +131,25 @@ class FocusMode(QWidget):
     def apply_styles(self):
         # Reuse the shared design system so Focus Mode matches the product.
         self.setStyleSheet(ThemeManager.app_stylesheet())
+
+    def animate_enter_transition(self):
+        """FOCUS-ENTER-01: Animate background color transition (~300ms) on entering Focus Mode."""
+        if is_reduced_motion_enabled():
+            return
+
+        self.bg_anim = QVariantAnimation(self)
+        self.bg_anim.setDuration(300)
+        self.bg_anim.setStartValue(QColor("#030407"))
+        self.bg_anim.setEndValue(QColor(Colors.BACKGROUND))
+        self.bg_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def update_bg(color):
+            palette = self.palette()
+            palette.setColor(self.backgroundRole(), color)
+            self.setPalette(palette)
+
+        self.bg_anim.valueChanged.connect(update_bg)
+        self.bg_anim.start()
 
     def build_ui(self):
         # Create the main layout for the fullscreen focus window.
