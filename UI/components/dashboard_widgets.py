@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -16,7 +16,13 @@ from PySide6.QtWidgets import (
 
 from Modules.date_utils import format_display_date
 from UI.theme.design_system import Colors, ThemeManager
-from UI.theme.motion_utils import is_reduced_motion_enabled
+from UI.theme.motion_utils import (
+    CELEBRATION_DURATION,
+    HERO_GREETING_DURATION,
+    MICRO_INTERACTION_DURATION,
+    get_daily_hero_message,
+    is_reduced_motion_enabled,
+)
 
 
 class CardFrame(QFrame):
@@ -173,10 +179,10 @@ class HeroCard(CardFrame):
         text_layout.setSpacing(1)
 
         self.greeting_label = make_label(f"{greeting}, Ascender", "Greeting")
-        quote = make_label("Stay focused. Keep ascending.", "MutedText")
+        self.subtitle_label = make_label(get_daily_hero_message(), "MutedText")
 
         text_layout.addWidget(self.greeting_label)
-        text_layout.addWidget(quote)
+        text_layout.addWidget(self.subtitle_label)
 
         date_layout = QVBoxLayout()
         date_layout.setSpacing(1)
@@ -200,24 +206,44 @@ class HeroCard(CardFrame):
         self.setLayout(layout)
 
     def animate_greeting(self):
-        """DASH-GREET-01: Fade in ONLY the greeting label once per calendar day (500ms)."""
+        """DASH-GREET-01: Micro spatial reveal (+staggered opacity) once per calendar day (500ms)."""
         if hasattr(self, "greeting_anim") and self.greeting_anim is not None and self.greeting_anim.state() == QPropertyAnimation.Running:
             self.greeting_anim.stop()
 
         if is_reduced_motion_enabled():
             if self.greeting_label.graphicsEffect() is not None:
                 self.greeting_label.setGraphicsEffect(None)
+            if self.subtitle_label.graphicsEffect() is not None:
+                self.subtitle_label.setGraphicsEffect(None)
             return
 
-        opacity_effect = QGraphicsOpacityEffect(self.greeting_label)
-        self.greeting_label.setGraphicsEffect(opacity_effect)
-        opacity_effect.setOpacity(0.0)
+        eff_greeting = QGraphicsOpacityEffect(self.greeting_label)
+        self.greeting_label.setGraphicsEffect(eff_greeting)
+        eff_greeting.setOpacity(0.0)
 
-        self.greeting_anim = QPropertyAnimation(opacity_effect, b"opacity")
-        self.greeting_anim.setDuration(500)
+        eff_sub = QGraphicsOpacityEffect(self.subtitle_label)
+        self.subtitle_label.setGraphicsEffect(eff_sub)
+        eff_sub.setOpacity(0.0)
+
+        self.greeting_anim = QPropertyAnimation(eff_greeting, b"opacity")
+        self.greeting_anim.setDuration(HERO_GREETING_DURATION)
         self.greeting_anim.setStartValue(0.0)
         self.greeting_anim.setEndValue(1.0)
         self.greeting_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def start_subtitle_anim():
+            if is_reduced_motion_enabled():
+                if self.subtitle_label.graphicsEffect() is not None:
+                    self.subtitle_label.setGraphicsEffect(None)
+                return
+            self.sub_anim = QPropertyAnimation(eff_sub, b"opacity")
+            self.sub_anim.setDuration(max(100, HERO_GREETING_DURATION - 100))
+            self.sub_anim.setStartValue(0.0)
+            self.sub_anim.setEndValue(1.0)
+            self.sub_anim.setEasingCurve(QEasingCurve.OutCubic)
+            self.sub_anim.start()
+
+        QTimer.singleShot(120, start_subtitle_anim)
         self.greeting_anim.start()
 
 

@@ -7,7 +7,7 @@ comparisons, patterns, and recommendations are provided by InsightsService.
 from datetime import date
 from statistics import median
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -21,6 +21,12 @@ from PySide6.QtWidgets import (
     QToolTip,
     QVBoxLayout,
     QWidget,
+)
+
+from UI.theme.motion_utils import (
+    CHART_BAR_DURATION,
+    CHART_TREND_DURATION,
+    is_reduced_motion_enabled,
 )
 
 from Modules.calibration_service import (
@@ -158,6 +164,8 @@ class FocusTrendChart(QWidget):
         self.points = ()
         self.granularity = "daily"
         self.hovered_index = None
+        self._draw_progress = 1.0
+        self.anim = None
         # A fixed height keeps the chart compact and guarantees the painted
         # bars always fit inside their container at every window size.
         self.setFixedHeight(190)
@@ -169,6 +177,26 @@ class FocusTrendChart(QWidget):
         self.granularity = granularity
         self.hovered_index = None
         self.setToolTip("")
+
+        if is_reduced_motion_enabled():
+            self._draw_progress = 1.0
+            self.update()
+            return
+
+        if self.anim is not None and self.anim.state() == QVariantAnimation.Running:
+            self.anim.stop()
+
+        self._draw_progress = 0.0
+        self.anim = QVariantAnimation(self)
+        self.anim.setDuration(CHART_TREND_DURATION)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.valueChanged.connect(self._on_draw_progress_changed)
+        self.anim.start()
+
+    def _on_draw_progress_changed(self, value):
+        self._draw_progress = float(value)
         self.update()
 
     def chart_geometry(self):
@@ -328,9 +356,10 @@ class FocusTrendChart(QWidget):
         for index, point in enumerate(self.points):
             x = chart_left + index * (bar_width + gap)
             if maximum > 0:
-                height = max(3, (point.focus_minutes / maximum) * chart_height)
+                base_h = max(3, (point.focus_minutes / maximum) * chart_height)
             else:
-                height = 3
+                base_h = 3
+            height = max(3, base_h * self._draw_progress)
             y = chart_bottom - height
             is_hovered = index == self.hovered_index
             is_strongest = index == max_index
@@ -499,6 +528,8 @@ class ActivityDistributionChart(QWidget):
         self.items = ()
         self.total_minutes = 0
         self.hovered_index = None
+        self._bar_progress = 1.0
+        self.anim = None
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMouseTracking(True)
 
@@ -509,6 +540,26 @@ class ActivityDistributionChart(QWidget):
         self.setFixedHeight(
             max(1, len(self.items)) * self.ROW_HEIGHT + 8
         )
+
+        if is_reduced_motion_enabled():
+            self._bar_progress = 1.0
+            self.update()
+            return
+
+        if self.anim is not None and self.anim.state() == QVariantAnimation.Running:
+            self.anim.stop()
+
+        self._bar_progress = 0.0
+        self.anim = QVariantAnimation(self)
+        self.anim.setDuration(CHART_BAR_DURATION)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.valueChanged.connect(self._on_bar_progress_changed)
+        self.anim.start()
+
+    def _on_bar_progress_changed(self, value):
+        self._bar_progress = float(value)
         self.update()
 
     def paintEvent(self, event):
@@ -565,10 +616,11 @@ class ActivityDistributionChart(QWidget):
             )
 
             # Bar proportional to the strongest category.
-            bar_width = max(
+            target_width = max(
                 4,
                 int((minutes / maximum) * (bar_right - bar_left)),
             )
+            bar_width = max(4, int(target_width * self._bar_progress))
             bar_color = QColor(
                 self.PALETTE[index % len(self.PALETTE)]
             )
@@ -926,18 +978,24 @@ class AnalyticsWindow(QWidget):
         self.content_layout.setContentsMargins(24, 18, 24, 24)
         self.content_layout.setSpacing(14)
 
+        self.scroll_area = scroll_area
+
         # The page follows the narrative: how am I doing -> what happened ->
         # where does time go -> when do I work best -> patterns -> learned.
         self.content_layout.addLayout(self.create_header())
-        self.content_layout.addWidget(self.create_overview_section())
-        self.content_layout.addWidget(self.create_focus_trends_section())
-        self.content_layout.addWidget(self.create_distribution_section())
-        self.content_layout.addWidget(self.create_day_hour_section())
-        self.content_layout.addWidget(self.create_calibration_section())
-        self.content_layout.addWidget(self.create_consistency_section())
-        self.content_layout.addWidget(self.create_learned_section())
-        self.content_layout.addWidget(self.create_highlights_section())
-        self.content_layout.addWidget(self.create_insights_section())
+        sections = (
+            self.create_overview_section(),
+            self.create_focus_trends_section(),
+            self.create_distribution_section(),
+            self.create_day_hour_section(),
+            self.create_calibration_section(),
+            self.create_consistency_section(),
+            self.create_learned_section(),
+            self.create_highlights_section(),
+            self.create_insights_section(),
+        )
+        for sec in sections:
+            self.content_layout.addWidget(sec)
         self.content_layout.addStretch()
 
         scroll_area.setWidget(content)

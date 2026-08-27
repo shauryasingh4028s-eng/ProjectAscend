@@ -29,7 +29,7 @@ from UI.components.dashboard_widgets import (
     ProgressCard,
 )
 from UI.theme.design_system import ButtonFactory, IconFactory, ThemeManager
-from UI.theme.motion_utils import is_reduced_motion_enabled
+from UI.theme.motion_utils import ScrollRevealManager, is_reduced_motion_enabled
 
 try:
     from Modules.xp_manager import XPManager
@@ -122,9 +122,15 @@ class DashboardV2(QWidget):
         main_layout.addWidget(self.create_activity_card(), 1)
         main_layout.addWidget(action_bar)
 
+        self.scroll_area = scroll_area
+        self.scroll_reveal_manager = ScrollRevealManager(self.scroll_area)
+
         scroll_area.setWidget(content)
         outer_layout.addWidget(scroll_area)
         self.setLayout(outer_layout)
+
+        self.scroll_reveal_manager.register_widget(self.focus_card)
+        self.scroll_reveal_manager.register_widget(self.activity_card)
 
     def create_header(self):
         self.settings_button = self.button_factory.secondary("Settings", "fa5s.cog")
@@ -176,23 +182,24 @@ class DashboardV2(QWidget):
         self.complete_button.clicked.connect(self.complete_current_activity)
         self.complete_button.setEnabled(False)
 
-        focus_card = FocusCard(
+        self.focus_card = FocusCard(
             self.start_button,
             self.pause_button,
             self.complete_button,
         )
-        self.current_activity_label = focus_card.current_activity_label
-        self.timer_label = focus_card.timer_label
-        return focus_card
+        self.current_activity_label = self.focus_card.current_activity_label
+        self.timer_label = self.focus_card.timer_label
+        return self.focus_card
 
     def create_activity_card(self):
         self.activity_section = ActivitySection()
+        self.activity_card = self.activity_section
         self.activity_section.activity_selected.connect(self.select_activity_by_id)
         self.activity_section.activity_double_clicked.connect(self.start_activity_by_id)
         self.activity_section.activity_menu_requested.connect(
             self.show_activity_menu_for_id
         )
-        return self.activity_section
+        return self.activity_card
 
     def create_action_bar(self):
         self.add_today_button = self.button_factory.action(

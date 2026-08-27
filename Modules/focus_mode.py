@@ -115,11 +115,9 @@ class FocusMode(QWidget):
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, False)
 
         # Build the fullscreen distraction-free interface.
-        self._bg_color_hex = Colors.BACKGROUND
         self.apply_styles()
         self.build_ui()
         self.showFullScreen()
-        self.animate_enter_transition()
 
         # Connect to the existing SessionEngine signals.
         self.session_engine.timer_updated.connect(self.update_timer)
@@ -131,48 +129,9 @@ class FocusMode(QWidget):
         # Show the current timer value immediately.
         self.update_timer(self.session_engine.elapsed_seconds)
 
-    def apply_styles(self, bg_color_hex=None):
-        if bg_color_hex is not None:
-            self._bg_color_hex = bg_color_hex
-        bg_hex = getattr(self, "_bg_color_hex", Colors.BACKGROUND)
+    def apply_styles(self):
         self.setObjectName("FocusModeWindow")
-
-        # Reuse the shared design system so Focus Mode matches the product.
-        # Explicitly set FocusModeWindow background color via QSS rule so
-        # Qt's stylesheet engine paints the animated background color dynamically,
-        # and ensure child QLabels have transparent background.
-        self.setStyleSheet(
-            ThemeManager.app_stylesheet()
-            + f"""
-            FocusMode#FocusModeWindow {{
-                background-color: {bg_hex};
-            }}
-            FocusMode#FocusModeWindow QLabel {{
-                background-color: transparent;
-            }}
-            """
-        )
-
-    def animate_enter_transition(self):
-        """FOCUS-ENTER-01: Animate background color transition (~1000ms) on entering Focus Mode."""
-        if is_reduced_motion_enabled():
-            self.apply_styles(Colors.BACKGROUND)
-            return
-
-        if hasattr(self, "bg_anim") and self.bg_anim is not None and self.bg_anim.state() == QVariantAnimation.Running:
-            self.bg_anim.stop()
-
-        self.bg_anim = QVariantAnimation(self)
-        self.bg_anim.setDuration(1000)
-        self.bg_anim.setStartValue(QColor("#030407"))
-        self.bg_anim.setEndValue(QColor(Colors.BACKGROUND))
-        self.bg_anim.setEasingCurve(QEasingCurve.OutCubic)
-
-        def update_bg(color):
-            self.apply_styles(color.name())
-
-        self.bg_anim.valueChanged.connect(update_bg)
-        self.bg_anim.start()
+        self.setStyleSheet(ThemeManager.app_stylesheet())
 
     def build_ui(self):
         # Create the main layout for the fullscreen focus window.
@@ -324,37 +283,4 @@ class FocusMode(QWidget):
                 pass
             self._signals_connected = False
 
-        # FOCUS-ENTER-01: Animate exit background color transition (~300ms) unless reduced motion is active or already animated.
-        if not getattr(self, "_exit_animated", False) and not is_reduced_motion_enabled():
-            event.ignore()
-            self.animate_exit_transition()
-            return
-
         super().closeEvent(event)
-
-    def animate_exit_transition(self):
-        """FOCUS-ENTER-01: 1000ms exit background color transition before window destruction."""
-        if getattr(self, "_exiting", False):
-            return
-
-        self._exiting = True
-
-        if hasattr(self, "bg_anim") and self.bg_anim is not None and self.bg_anim.state() == QVariantAnimation.Running:
-            self.bg_anim.stop()
-
-        self.exit_anim = QVariantAnimation(self)
-        self.exit_anim.setDuration(1000)
-        self.exit_anim.setStartValue(QColor(Colors.BACKGROUND))
-        self.exit_anim.setEndValue(QColor("#030407"))
-        self.exit_anim.setEasingCurve(QEasingCurve.OutCubic)
-
-        def update_bg(color):
-            self.apply_styles(color.name())
-
-        def finalize_close():
-            self._exit_animated = True
-            self.close()
-
-        self.exit_anim.valueChanged.connect(update_bg)
-        self.exit_anim.finished.connect(finalize_close)
-        self.exit_anim.start()
