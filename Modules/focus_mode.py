@@ -92,7 +92,7 @@ class CircularTimer(QWidget):
 
 
 class FocusMode(QWidget):
-    def __init__(self, activity, session_engine, dashboard):
+    def __init__(self, activity, session_engine, dashboard=None):
         super().__init__()
 
         # Store the selected activity shown in Focus Mode.
@@ -110,10 +110,12 @@ class FocusMode(QWidget):
 
         # Configure the Focus Mode window.
         self.setWindowTitle("Project Ascend Focus Mode")
+        self.setObjectName("FocusModeWindow")
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, False)
 
         # Build the fullscreen distraction-free interface.
+        self._bg_color_hex = Colors.BACKGROUND
         self.apply_styles()
         self.build_ui()
         self.showFullScreen()
@@ -124,29 +126,50 @@ class FocusMode(QWidget):
         self.session_engine.session_paused.connect(self.show_paused_state)
         self.session_engine.session_resumed.connect(self.show_running_state)
         self.session_engine.session_completed.connect(self.close_after_complete)
+        self._signals_connected = True
 
         # Show the current timer value immediately.
         self.update_timer(self.session_engine.elapsed_seconds)
 
-    def apply_styles(self):
+    def apply_styles(self, bg_color_hex=None):
+        if bg_color_hex is not None:
+            self._bg_color_hex = bg_color_hex
+        bg_hex = getattr(self, "_bg_color_hex", Colors.BACKGROUND)
+        self.setObjectName("FocusModeWindow")
+
         # Reuse the shared design system so Focus Mode matches the product.
-        self.setStyleSheet(ThemeManager.app_stylesheet())
+        # Explicitly set FocusModeWindow background color via QSS rule so
+        # Qt's stylesheet engine paints the animated background color dynamically,
+        # and ensure child QLabels have transparent background.
+        self.setStyleSheet(
+            ThemeManager.app_stylesheet()
+            + f"""
+            FocusMode#FocusModeWindow {{
+                background-color: {bg_hex};
+            }}
+            FocusMode#FocusModeWindow QLabel {{
+                background-color: transparent;
+            }}
+            """
+        )
 
     def animate_enter_transition(self):
-        """FOCUS-ENTER-01: Animate background color transition (~300ms) on entering Focus Mode."""
+        """FOCUS-ENTER-01: Animate background color transition (~1000ms) on entering Focus Mode."""
         if is_reduced_motion_enabled():
+            self.apply_styles(Colors.BACKGROUND)
             return
 
+        if hasattr(self, "bg_anim") and self.bg_anim is not None and self.bg_anim.state() == QVariantAnimation.Running:
+            self.bg_anim.stop()
+
         self.bg_anim = QVariantAnimation(self)
-        self.bg_anim.setDuration(300)
+        self.bg_anim.setDuration(1000)
         self.bg_anim.setStartValue(QColor("#030407"))
         self.bg_anim.setEndValue(QColor(Colors.BACKGROUND))
         self.bg_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         def update_bg(color):
-            palette = self.palette()
-            palette.setColor(self.backgroundRole(), color)
-            self.setPalette(palette)
+            self.apply_styles(color.name())
 
         self.bg_anim.valueChanged.connect(update_bg)
         self.bg_anim.start()
@@ -263,7 +286,8 @@ class FocusMode(QWidget):
 
     def close_after_complete(self, activity):
         # Refresh the Dashboard and close Focus Mode after completion.
-        self.dashboard.load_today_activities()
+        if self.dashboard is not None and hasattr(self.dashboard, "load_today_activities"):
+            self.dashboard.load_today_activities()
         self.close()
 
     def keyPressEvent(self, event):
@@ -275,21 +299,30 @@ class FocusMode(QWidget):
 
     def closeEvent(self, event):
         # Disconnect signals so closed Focus Mode windows do not keep updating.
-        try:
-            self.session_engine.timer_updated.disconnect(self.update_timer)
-            self.session_engine.session_paused.disconnect(
-                self.show_paused_state
-            )
-            self.session_engine.session_resumed.disconnect(
-                self.show_running_state
-            )
-            self.session_engine.session_completed.disconnect(
-                self.close_after_complete
-            )
-        except RuntimeError:
-            pass
-        except TypeError:
-            pass
+        if getattr(self, "_signals_connected", False):
+            try:
+                self.session_engine.timer_updated.disconnect(self.update_timer)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self.session_engine.session_paused.disconnect(
+                    self.show_paused_state
+                )
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self.session_engine.session_resumed.disconnect(
+                    self.show_running_state
+                )
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self.session_engine.session_completed.disconnect(
+                    self.close_after_complete
+                )
+            except (RuntimeError, TypeError):
+                pass
+            self._signals_connected = False
 
         # FOCUS-ENTER-01: Animate exit background color transition (~300ms) unless reduced motion is active or already animated.
         if not getattr(self, "_exit_animated", False) and not is_reduced_motion_enabled():
@@ -300,7 +333,7 @@ class FocusMode(QWidget):
         super().closeEvent(event)
 
     def animate_exit_transition(self):
-        """FOCUS-ENTER-01: 300ms exit background color transition before window destruction."""
+        """FOCUS-ENTER-01: 1000ms exit background color transition before window destruction."""
         if getattr(self, "_exiting", False):
             return
 
@@ -310,15 +343,13 @@ class FocusMode(QWidget):
             self.bg_anim.stop()
 
         self.exit_anim = QVariantAnimation(self)
-        self.exit_anim.setDuration(300)
+        self.exit_anim.setDuration(1000)
         self.exit_anim.setStartValue(QColor(Colors.BACKGROUND))
         self.exit_anim.setEndValue(QColor("#030407"))
         self.exit_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         def update_bg(color):
-            palette = self.palette()
-            palette.setColor(self.backgroundRole(), color)
-            self.setPalette(palette)
+            self.apply_styles(color.name())
 
         def finalize_close():
             self._exit_animated = True

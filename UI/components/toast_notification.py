@@ -108,7 +108,7 @@ class ToastNotification(QFrame):
 
     def restart_dismiss_timer(self):
         self.dismiss_timer.stop()
-        self.dismiss_timer.start(3000)
+        self.dismiss_timer.start(3500)
 
     def start_presentation(self):
         parent = self.parentWidget()
@@ -130,24 +130,24 @@ class ToastNotification(QFrame):
         if is_reduced_motion_enabled():
             self.move(target_x, target_y)
             self.opacity_effect.setOpacity(1.0)
-            self.dismiss_timer.start(3000)
+            self.dismiss_timer.start(3500)
             return
 
-        # Animate Y position (slide down) and opacity (fade in)
+        # Animate Y position (slide down, 600ms) and opacity (fade in, 450ms)
         self.slide_anim = QPropertyAnimation(self, b"pos")
-        self.slide_anim.setDuration(400)
+        self.slide_anim.setDuration(600)
         self.slide_anim.setStartValue(self.pos())
         self.slide_anim.setEndValue(QRect(target_x, target_y, toast_width, toast_height).topLeft())
         self.slide_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         self.fade_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
-        self.fade_anim.setDuration(300)
+        self.fade_anim.setDuration(450)
         self.fade_anim.setStartValue(0.0)
         self.fade_anim.setEndValue(1.0)
 
         self.slide_anim.start()
         self.fade_anim.start()
-        self.dismiss_timer.start(3400)
+        self.dismiss_timer.start(3500)
 
     def dismiss(self):
         if self.slide_anim is not None and self.slide_anim.state() == QPropertyAnimation.Running:
@@ -165,13 +165,13 @@ class ToastNotification(QFrame):
         target_y = -toast_height - 10
 
         self.slide_anim = QPropertyAnimation(self, b"pos")
-        self.slide_anim.setDuration(400)
+        self.slide_anim.setDuration(500)
         self.slide_anim.setStartValue(self.pos())
         self.slide_anim.setEndValue(QRect(target_x, target_y, toast_width, toast_height).topLeft())
         self.slide_anim.setEasingCurve(QEasingCurve.InCubic)
 
         self.fade_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
-        self.fade_anim.setDuration(350)
+        self.fade_anim.setDuration(400)
         self.fade_anim.setStartValue(self.opacity_effect.opacity())
         self.fade_anim.setEndValue(0.0)
 

@@ -200,7 +200,7 @@ class HeroCard(CardFrame):
         self.setLayout(layout)
 
     def animate_greeting(self):
-        """DASH-GREET-01: Fade in ONLY the greeting label once per calendar day."""
+        """DASH-GREET-01: Fade in ONLY the greeting label once per calendar day (500ms)."""
         if hasattr(self, "greeting_anim") and self.greeting_anim is not None and self.greeting_anim.state() == QPropertyAnimation.Running:
             self.greeting_anim.stop()
 
@@ -214,7 +214,7 @@ class HeroCard(CardFrame):
         opacity_effect.setOpacity(0.0)
 
         self.greeting_anim = QPropertyAnimation(opacity_effect, b"opacity")
-        self.greeting_anim.setDuration(150)
+        self.greeting_anim.setDuration(500)
         self.greeting_anim.setStartValue(0.0)
         self.greeting_anim.setEndValue(1.0)
         self.greeting_anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -300,7 +300,7 @@ class ProgressCard(CardFrame):
         self.setLayout(layout)
 
     def animate_goal_completion(self):
-        """GOAL-COMPLETE-01: Target ONLY the daily goal badge/icon (1.0 -> 1.15 -> 1.0 over ~600ms OutBack)."""
+        """GOAL-COMPLETE-01: Target ONLY the daily goal badge/icon (1.0 -> 1.15 -> 1.0 over ~900ms OutBack)."""
         if hasattr(self, "goal_anim") and self.goal_anim is not None and self.goal_anim.state() == QVariantAnimation.Running:
             self.goal_anim.stop()
 
@@ -312,7 +312,7 @@ class ProgressCard(CardFrame):
             return
 
         self.goal_anim = QVariantAnimation(self)
-        self.goal_anim.setDuration(600)
+        self.goal_anim.setDuration(900)
         self.goal_anim.setStartValue(1.0)
         self.goal_anim.setKeyValueAt(0.5, 1.15)
         self.goal_anim.setEndValue(1.0)
@@ -520,7 +520,7 @@ class ActivityCard(CardFrame):
         self.setLayout(layout)
 
     def animate_check_icon(self):
-        """TASK-CHECK-01: Animate local checkmark icon (1.0 -> 0.85 -> 1.0, ~150ms). Zero layout shift."""
+        """TASK-CHECK-01: Animate local checkmark icon (1.0 -> 0.85 -> 1.0, ~300ms). Zero layout shift."""
         if hasattr(self, "icon_anim") and self.icon_anim is not None and self.icon_anim.state() == QVariantAnimation.Running:
             self.icon_anim.stop()
 
@@ -531,7 +531,7 @@ class ActivityCard(CardFrame):
             return
 
         self.icon_anim = QVariantAnimation(self)
-        self.icon_anim.setDuration(150)
+        self.icon_anim.setDuration(300)
         self.icon_anim.setStartValue(1.0)
         self.icon_anim.setKeyValueAt(0.5, 0.85)
         self.icon_anim.setEndValue(1.0)

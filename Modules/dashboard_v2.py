@@ -631,7 +631,7 @@ class DashboardV2(QWidget):
             )
 
     def animate_progress_bar(self, progress_bar, target_value):
-        """DASH-PROGRESS-01: Animate progress bar 0 -> target_value on session launch, smoothly on updates."""
+        """DASH-PROGRESS-01: Animate progress bar 0 -> target_value on session launch, smoothly on updates (700ms)."""
         if self.progress_animation is not None and self.progress_animation.state() == QPropertyAnimation.Running:
             self.progress_animation.stop()
 
@@ -646,7 +646,7 @@ class DashboardV2(QWidget):
             start_val = progress_bar.value()
 
         self.progress_animation = QPropertyAnimation(progress_bar, b"value")
-        self.progress_animation.setDuration(300)
+        self.progress_animation.setDuration(700)
         self.progress_animation.setStartValue(start_val)
         self.progress_animation.setEndValue(target_value)
         self.progress_animation.setEasingCurve(QEasingCurve.OutCubic)
