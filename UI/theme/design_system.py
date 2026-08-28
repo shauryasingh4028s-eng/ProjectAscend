@@ -445,6 +445,109 @@ class ThemeManager:
                 border: 1px solid {Colors.BORDER_STRONG};
             }}
 
+            /* ---------- History Tab Styling ---------- */
+
+            QFrame#HistoryDayCard {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.MD}px;
+            }}
+
+            QFrame#HistoryDayCard:hover {{
+                background-color: {Colors.SURFACE_HOVER};
+                border: 1px solid {Colors.BORDER_STRONG};
+            }}
+
+            QFrame#HistoryDayCard[selected="true"] {{
+                background-color: {Colors.SURFACE_ELEVATED};
+                border: 1px solid {Colors.PRIMARY};
+            }}
+
+            QLabel#HistoryWeekHeader {{
+                color: {Colors.TEXT_MUTED};
+                font-size: {Typography.LABEL}px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }}
+
+            QLabel#HistoryDate {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: {Typography.BODY}px;
+                font-weight: 700;
+            }}
+
+            QLabel#HistoryWeekday {{
+                color: {Colors.TEXT_MUTED};
+                font-size: {Typography.SECONDARY}px;
+            }}
+
+            QLabel#HistoryBadgeAchieved {{
+                background-color: {Colors.SUCCESS_SOFT};
+                color: {Colors.SUCCESS};
+                border: 1px solid {Colors.SUCCESS_SOFT};
+                border-radius: {Radius.SM}px;
+                padding: 3px 8px;
+                font-weight: 700;
+                font-size: 11px;
+            }}
+
+            QLabel#HistoryBadgeMissed {{
+                background-color: {Colors.WARNING_SOFT};
+                color: {Colors.WARNING};
+                border: 1px solid {Colors.WARNING_SOFT};
+                border-radius: {Radius.SM}px;
+                padding: 3px 8px;
+                font-weight: 700;
+                font-size: 11px;
+            }}
+
+            QLabel#HistoryBadgeRest {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                color: {Colors.TEXT_MUTED};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.SM}px;
+                padding: 3px 8px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+
+            QFrame#DaySnapshotSurface {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.LG}px;
+            }}
+
+            QLabel#DaySnapshotTitle {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 16px;
+                font-weight: 800;
+            }}
+
+            QFrame#DaySnapshotStatusBanner {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.MD}px;
+            }}
+
+            QFrame#DaySnapshotMetricTile {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.MD}px;
+            }}
+
+            QFrame#DaySnapshotReflectionBox {{
+                background-color: {Colors.PRIMARY_SOFT};
+                border: 1px solid {Colors.PRIMARY_MUTED};
+                border-radius: {Radius.MD}px;
+            }}
+
+            QFrame#HistoryActivityItem,
+            QFrame#HistorySessionItem {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.SM}px;
+            }}
+
             QLabel {{
                 background: transparent;
                 border: none;

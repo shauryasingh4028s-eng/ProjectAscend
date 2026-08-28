@@ -746,6 +746,106 @@ class Database:
 
         return self.cursor.fetchone()
 
+    def get_day_details(self, activity_date):
+        """Fetch all details for a single day required by History's Day Snapshot.
+
+        Returns a dictionary containing daily_history summary, activities list,
+        focus_sessions list, xp_events list, total_xp, and daily_goal.
+        """
+        history_row = self.get_history_for_date(activity_date)
+
+        self.cursor.execute("""
+            SELECT
+                id,
+                date,
+                activity_type,
+                name,
+                estimated_minutes,
+                original_estimate_minutes,
+                completed,
+                actual_minutes,
+                xp_awarded
+            FROM activities
+            WHERE date = ?
+            ORDER BY id ASC
+        """, (activity_date,))
+        activity_rows = self.cursor.fetchall()
+
+        self.cursor.execute("""
+            SELECT
+                id,
+                activity_id,
+                session_date,
+                started_at,
+                completed_at,
+                actual_minutes,
+                actual_seconds
+            FROM focus_sessions
+            WHERE session_date = ?
+            ORDER BY started_at ASC
+        """, (activity_date,))
+        session_rows = self.cursor.fetchall()
+
+        self.cursor.execute("""
+            SELECT
+                id,
+                activity_id,
+                earned_date,
+                amount,
+                event_type
+            FROM xp_events
+            WHERE earned_date = ?
+            ORDER BY id ASC
+        """, (activity_date,))
+        xp_rows = self.cursor.fetchall()
+
+        total_xp = sum(row[3] or 0 for row in xp_rows)
+        daily_goal = self.get_daily_goal()
+
+        return {
+            "date": activity_date,
+            "history": history_row,
+            "activities": [
+                {
+                    "id": row[0],
+                    "date": row[1],
+                    "activity_type": row[2],
+                    "name": row[3],
+                    "estimated_minutes": row[4],
+                    "original_estimate_minutes": row[5],
+                    "completed": bool(row[6]),
+                    "actual_minutes": max(0, row[7] or 0),
+                    "xp_awarded": row[8] or 0,
+                }
+                for row in activity_rows
+            ],
+            "focus_sessions": [
+                {
+                    "id": row[0],
+                    "activity_id": row[1],
+                    "session_date": row[2],
+                    "started_at": row[3],
+                    "completed_at": row[4],
+                    "actual_minutes": max(0, row[5] or 0),
+                    "actual_seconds": row[6],
+                }
+                for row in session_rows
+            ],
+            "xp_events": [
+                {
+                    "id": row[0],
+                    "activity_id": row[1],
+                    "earned_date": row[2],
+                    "amount": row[3] or 0,
+                    "event_type": row[4],
+                }
+                for row in xp_rows
+            ],
+            "total_xp": total_xp,
+            "daily_goal": daily_goal,
+        }
+
+
     def close(self):
         # Close the database connection when the app exits.
         self.connection.close()
