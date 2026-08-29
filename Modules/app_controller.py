@@ -2,6 +2,8 @@ from Modules.analytics import AnalyticsWindow
 from Modules.capacity_service import CapacityService
 from Modules.insights_service import InsightsService
 from Modules.achievement_manager import AchievementManager
+from Modules.character_manager import CharacterManager
+from Modules.progression_service import ProgressionService
 from Modules.xp_manager import XPManager
 from Modules.streak_manager import StreakManager
 from Modules.telemetry import AnalyticsClient
@@ -45,6 +47,19 @@ class AppController:
             self.xp_manager,
         )
 
+        self.character_manager = CharacterManager(self.database)
+
+        self.progression_service = ProgressionService(
+            self.database,
+            self.xp_manager,
+            self.streak_manager,
+            self.achievement_manager,
+            self.character_manager,
+        )
+
+        # Run startup progression event check & reconciliation
+        self.progression_service.check_progression_events(trigger_event="app_startup")
+
         # Planned workload against the user's own stated available time.
         # Read-only over activities; the only value it ever writes is the
         # available time the user explicitly enters.
@@ -66,6 +81,8 @@ class AppController:
         self.player_progress_page = PlayerProgressPage(
             self.xp_manager,
             self.streak_manager,
+            progression_service=self.progression_service,
+            character_manager=self.character_manager,
         )
         self.settings_page = SettingsPage(self.database)
         self.settings_page.daily_goal_changed.connect(
@@ -142,14 +159,23 @@ class AppController:
     def refresh_sidebar_progress(self):
         """Push already-calculated XP values into the sidebar summary."""
         total_xp = self.xp_manager.get_total_xp()
-        level = self.xp_manager.get_level()
-        xp_into_level = total_xp % XP_PER_LEVEL
+        level, xp_into_level, xp_for_level, xp_remaining = self.xp_manager.get_level_progress()
         self.shell.sidebar.player_card.set_progress(
             level,
             xp_into_level,
-            XP_PER_LEVEL,
+            xp_for_level,
             total_xp,
         )
+        if hasattr(self, "character_manager") and hasattr(self, "progression_service"):
+            summary = self.progression_service.get_progression_summary()
+            selected_char = summary["character"]
+            evolution = summary["evolution_info"]
+            self.shell.sidebar.player_card.set_name(selected_char["name"])
+
+            from Modules.character_asset_manager import CharacterAssetManager
+            asset_mgr = CharacterAssetManager()
+            pixmap = asset_mgr.get_character_pixmap(selected_char["id"], stage=evolution["stage"], width=30, height=30)
+            self.shell.sidebar.player_card.set_avatar_pixmap(pixmap)
 
         if hasattr(self, "_last_known_level") and self._last_known_level is not None:
             if level > self._last_known_level:
@@ -230,6 +256,10 @@ class AppController:
         self.shell.show_page("settings")
 
     def notify_activity_data_changed(self):
+        # Refresh progression events and evaluation
+        if hasattr(self, "progression_service"):
+            self.progression_service.check_progression_events(trigger_event="activity_data_change")
+
         # Refresh open screens immediately after a persisted activity change.
         self.refresh_sidebar_progress()
 

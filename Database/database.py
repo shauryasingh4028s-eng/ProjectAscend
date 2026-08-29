@@ -11,12 +11,13 @@ import os
 #
 # v1  - v1.1 baseline schema (activities, settings, focus_sessions,
 #       xp_events, daily_history).
-# v2  - v1.2 Calibration Foundation:
-#       * activities.original_estimate_minutes preserves the ORIGINAL
-#         planning estimate after the editable estimate is changed.
-#       * focus_sessions.actual_seconds keeps the precise elapsed execution
-#         seconds while the existing minute-level fields stay unchanged.
-SCHEMA_VERSION = 2
+# v3  - Player Progression Infrastructure:
+#       * user_achievements table (persistent achievement unlocks with timestamps)
+#       * user_progression_profile table (character & progression settings)
+#       * level_history table (permanent record of level threshold reaches)
+#       * milestone_history table (permanent record of milestone tier achievements)
+#       * partial unique indexes on xp_events for idempotency & void safety
+SCHEMA_VERSION = 3
 
 
 def _has_column(cursor, table, column):
@@ -56,10 +57,101 @@ def _migrate_to_v2(cursor):
         )
 
 
+def _migrate_to_v3(cursor):
+    """v3 Player Progression Infrastructure.
+
+    - user_achievements: Persistent achievement unlocks with timestamps.
+    - user_progression_profile: Permanent settings for progression identity (character, preferences).
+    - level_history: Permanent record of when level thresholds were crossed.
+    - milestone_history: Permanent record of milestone tier achievements.
+    - Safe partial unique indexes on xp_events to guarantee database-level idempotency.
+    - Legacy XP import seeding: Preserves existing settings.total_xp in the xp_events ledger.
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            achievement_id TEXT UNIQUE NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            trigger_event TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_progression_profile (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS level_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            level INTEGER UNIQUE NOT NULL,
+            reached_at TEXT NOT NULL,
+            xp_at_unlock INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS milestone_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            milestone_id TEXT NOT NULL,
+            tier INTEGER NOT NULL,
+            reached_at TEXT NOT NULL,
+            UNIQUE(milestone_id, tier)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_achievements_date
+        ON user_achievements(unlocked_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_level_history_level
+        ON level_history(level)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_milestone_history_milestone
+        ON milestone_history(milestone_id)
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_xp_events_daily_goal
+        ON xp_events(earned_date, event_type)
+        WHERE event_type = 'daily_goal_completion'
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_xp_events_activity_void
+        ON xp_events(activity_id, event_type)
+        WHERE event_type = 'activity_void'
+    """)
+
+    # Retroactively populate daily goal XP events for past daily_history goals prior to legacy diff calculation
+    cursor.execute("SELECT date FROM daily_history WHERE goal_completed = 1")
+    goal_dates = [row[0] for row in cursor.fetchall()]
+    for goal_date in goal_dates:
+        cursor.execute("""
+            INSERT OR IGNORE INTO xp_events (activity_id, earned_date, amount, event_type)
+            VALUES (NULL, ?, 50, 'daily_goal_completion')
+        """, (goal_date,))
+
+    # Seed legacy accumulated XP into xp_events ledger if settings.total_xp exceeds ledger
+    cursor.execute("SELECT value FROM settings WHERE key = 'total_xp'")
+    setting_row = cursor.fetchone()
+    legacy_xp = int(setting_row[0]) if setting_row and setting_row[0].isdigit() else 0
+
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM xp_events")
+    ledger_xp = cursor.fetchone()[0] or 0
+
+    diff = legacy_xp - ledger_xp
+    if diff > 0:
+        cursor.execute("""
+            INSERT INTO xp_events (activity_id, earned_date, amount, event_type)
+            VALUES (NULL, '2026-08-28', ?, 'legacy_xp_import')
+        """, (diff,))
+
+
 # Ordered schema migrations: target version -> migration callable.
 MIGRATIONS = {
     2: _migrate_to_v2,
+    3: _migrate_to_v3,
 }
+
 
 
 class Database:
@@ -154,6 +246,63 @@ class Database:
             )
         """)
 
+        # Create v3 progression & gamification tables to guarantee availability
+        # before any reconciliation or level recording operations execute.
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                achievement_id TEXT UNIQUE NOT NULL,
+                unlocked_at TEXT NOT NULL,
+                trigger_event TEXT NOT NULL
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_progression_profile (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS level_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                level INTEGER UNIQUE NOT NULL,
+                reached_at TEXT NOT NULL,
+                xp_at_unlock INTEGER NOT NULL
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS milestone_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                milestone_id TEXT NOT NULL,
+                tier INTEGER NOT NULL,
+                reached_at TEXT NOT NULL,
+                UNIQUE(milestone_id, tier)
+            )
+        """)
+
+        self.cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_achievements_date
+            ON user_achievements(unlocked_at)
+        """)
+        self.cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_level_history_level
+            ON level_history(level)
+        """)
+        self.cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_milestone_history_milestone
+            ON milestone_history(milestone_id)
+        """)
+        self.cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_xp_events_daily_goal
+            ON xp_events(earned_date, event_type)
+            WHERE event_type = 'daily_goal_completion'
+        """)
+        self.cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_xp_events_activity_void
+            ON xp_events(activity_id, event_type)
+            WHERE event_type = 'activity_void'
+        """)
+
         # Add newer activity columns if this database is from an older version.
         self.add_missing_columns()
 
@@ -167,6 +316,9 @@ class Database:
 
         # Bring older database files forward to the current schema version.
         self.run_migrations()
+
+        # Reconcile XP ledger with cache and populate level history retroactively.
+        self.sync_and_reconcile_xp_ledger()
 
         # Save table and default-setting changes to the SQLite database file.
         self.connection.commit()
@@ -225,9 +377,14 @@ class Database:
             )
 
     def create_default_settings(self):
-        # Add the default daily goal only when it does not already exist.
-        if self.get_setting("daily_goal") is None:
+        # Add default settings if they do not already exist.
+        self.cursor.execute("SELECT key FROM settings WHERE key IN ('daily_goal', 'total_xp')")
+        existing_keys = {row[0] for row in self.cursor.fetchall()}
+        if "daily_goal" not in existing_keys:
             self.set_setting("daily_goal", "360")
+        if "total_xp" not in existing_keys:
+            total_xp = self.get_total_xp_from_events()
+            self.set_setting("total_xp", str(total_xp))
 
     def backfill_activity_completion_xp_events(self):
         # Every activity marked xp_awarded received the established 10 XP
@@ -354,6 +511,10 @@ class Database:
             activity.id,
         ))
 
+        # Check for uncompletion to record void compensating event
+        if not activity.completed:
+            self.void_activity_completion_xp(activity.id)
+
         # Save the update permanently.
         self.connection.commit()
 
@@ -374,6 +535,9 @@ class Database:
             return
 
         activity_date = row[0]
+
+        # Record void compensating XP event if activity was previously awarded XP.
+        self.void_activity_completion_xp(activity_id)
 
         # Delete one activity from SQLite by its id.
         self.cursor.execute("""
@@ -405,6 +569,39 @@ class Database:
             activities.append(activity)
 
         return activities
+
+    def get_total_focus_minutes(self):
+        """Return maximum of sum of focus_sessions actual_minutes or completed activities actual_minutes."""
+        self.cursor.execute("SELECT COALESCE(SUM(actual_minutes), 0) FROM focus_sessions")
+        session_row = self.cursor.fetchone()
+        session_mins = session_row[0] if session_row else 0
+
+        self.cursor.execute("SELECT COALESCE(SUM(actual_minutes), 0) FROM activities WHERE completed = 1")
+        activity_row = self.cursor.fetchone()
+        activity_mins = activity_row[0] if activity_row else 0
+        return max(int(session_mins), int(activity_mins))
+
+    def get_total_completed_activities(self):
+        """Return total count of completed activities across all history."""
+        self.cursor.execute("SELECT COUNT(*) FROM activities WHERE completed = 1")
+        row = self.cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    def get_today_task_completion_status(self, today_str=None):
+        """Return (completed_tasks, total_tasks) for the specified date (default today)."""
+        if today_str is None:
+            today_str = date.today().isoformat()
+        self.cursor.execute("""
+            SELECT
+                SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END),
+                COUNT(*)
+            FROM activities
+            WHERE date = ?
+        """, (today_str,))
+        row = self.cursor.fetchone()
+        completed = int(row[0] or 0) if row else 0
+        total = int(row[1] or 0) if row else 0
+        return completed, total
 
     def get_setting(self, key):
         # Return one setting value, or None if the key does not exist.
@@ -454,49 +651,254 @@ class Database:
         minutes = max(30, min(int(minutes), 1440))
         self.set_setting("daily_goal", minutes)
 
-    def award_activity_completion_xp(self, activity_id, amount):
-        # Award completion XP only once for a completed activity.
+    def get_total_xp_from_events(self):
+        """Compute authoritative total XP directly from the xp_events ledger."""
+        self.cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM xp_events")
+        row = self.cursor.fetchone()
+        return max(0, int(row[0])) if row else 0
+
+    def sync_total_xp_cache(self):
+        """Reconcile and synchronize settings.total_xp cache with the authoritative xp_events ledger."""
+        total_xp = self.get_total_xp_from_events()
+        self.set_setting("total_xp", total_xp)
+        return total_xp
+
+    def get_activity_net_xp_events(self, activity_id):
+        """Return (completion_count, void_count) for a specific activity_id."""
         self.cursor.execute("""
-            UPDATE activities
-            SET xp_awarded = 1
-            WHERE id = ?
-              AND completed = 1
-              AND xp_awarded = 0
+            SELECT
+                SUM(CASE WHEN event_type = 'activity_completion' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN event_type = 'activity_void' THEN 1 ELSE 0 END)
+            FROM xp_events
+            WHERE activity_id = ?
         """, (activity_id,))
+        row = self.cursor.fetchone()
+        completions = row[0] or 0 if row else 0
+        voids = row[1] or 0 if row else 0
+        return completions, voids
 
-        if self.cursor.rowcount != 1:
+    def award_activity_completion_xp(self, activity_id, amount=10):
+        """Award activity completion XP (+10) with idempotent event-driven protection."""
+        if activity_id is None:
+            return self.sync_total_xp_cache()
+
+        completions, voids = self.get_activity_net_xp_events(activity_id)
+        net_awarded = completions - voids
+
+        if net_awarded <= 0:
+            today_str = date.today().isoformat()
+            self.cursor.execute("""
+                INSERT INTO xp_events (
+                    activity_id,
+                    earned_date,
+                    amount,
+                    event_type
+                )
+                VALUES (?, ?, ?, 'activity_completion')
+            """, (activity_id, today_str, amount))
+
+            self.cursor.execute("""
+                UPDATE activities SET xp_awarded = 1 WHERE id = ?
+            """, (activity_id,))
+
+            total_xp = self.sync_total_xp_cache()
             self.connection.commit()
-            return self.get_total_xp_setting()
+            self.check_and_record_level_reaches(total_xp)
+            return total_xp
 
-        total_xp = self.get_total_xp_setting() + amount
+        return self.sync_total_xp_cache()
+
+    def void_activity_completion_xp(self, activity_id):
+        """Record a compensating void event (-10 XP) if an awarded activity is uncompleted or deleted."""
+        if activity_id is None:
+            return self.sync_total_xp_cache()
+
+        completions, voids = self.get_activity_net_xp_events(activity_id)
+        net_awarded = completions - voids
+
+        if net_awarded > 0:
+            today_str = date.today().isoformat()
+            self.cursor.execute("""
+                INSERT INTO xp_events (
+                    activity_id,
+                    earned_date,
+                    amount,
+                    event_type
+                )
+                VALUES (?, ?, -10, 'activity_void')
+            """, (activity_id, today_str))
+
+            self.cursor.execute("""
+                UPDATE activities SET xp_awarded = 0 WHERE id = ?
+            """, (activity_id,))
+
+            total_xp = self.sync_total_xp_cache()
+            self.connection.commit()
+            return total_xp
+
+        return self.sync_total_xp_cache()
+
+    def award_daily_goal_xp(self, earned_date=None, amount=50):
+        """Award Daily Goal XP (+50) strictly throttled to max 1 grant per calendar date."""
+        if earned_date is None:
+            earned_date = date.today().isoformat()
+
+        # Verify daily_history goal_completed == 1 for this date
+        history_row = self.get_history_for_date(earned_date)
+        if not history_row or not bool(history_row[5]):
+            return self.sync_total_xp_cache()
+
+        # Check if daily_goal_completion event already exists for this date
         self.cursor.execute("""
-            INSERT OR REPLACE INTO settings (key, value)
-            VALUES ('total_xp', ?)
-        """, (str(total_xp),))
+            SELECT COUNT(*) FROM xp_events
+            WHERE earned_date = ? AND event_type = 'daily_goal_completion'
+        """, (earned_date,))
+        if self.cursor.fetchone()[0] > 0:
+            return self.sync_total_xp_cache()
+
         self.cursor.execute("""
-            INSERT INTO xp_events (
+            INSERT OR IGNORE INTO xp_events (
                 activity_id,
                 earned_date,
                 amount,
                 event_type
             )
-            VALUES (?, ?, ?, 'activity_completion')
-        """, (
-            activity_id,
-            date.today().isoformat(),
-            amount,
-        ))
+            VALUES (NULL, ?, ?, 'daily_goal_completion')
+        """, (earned_date, amount))
+
+        total_xp = self.sync_total_xp_cache()
         self.connection.commit()
+        self.check_and_record_level_reaches(total_xp)
+        return total_xp
+
+    def check_and_record_level_reaches(self, total_xp, timestamp=None):
+        """Record level threshold reaches retroactively and deterministically in level_history."""
+        from Modules.xp_manager import calculate_level_from_xp, get_level_threshold
+        current_level = calculate_level_from_xp(total_xp)
+        if timestamp is None:
+            timestamp = date.today().isoformat()
+
+        newly_recorded = []
+        for lvl in range(1, current_level + 1):
+            xp_req = get_level_threshold(lvl)
+            self.cursor.execute("""
+                INSERT OR IGNORE INTO level_history (level, reached_at, xp_at_unlock)
+                VALUES (?, ?, ?)
+            """, (lvl, timestamp, xp_req))
+            if self.cursor.rowcount > 0:
+                newly_recorded.append(lvl)
+        self.connection.commit()
+        return newly_recorded
+
+    def get_level_history(self):
+        """Return level history rows."""
+        self.cursor.execute("""
+            SELECT level, reached_at, xp_at_unlock
+            FROM level_history
+            ORDER BY level ASC
+        """)
+        rows = self.cursor.fetchall()
+        return [
+            {
+                "level": row[0],
+                "reached_at": row[1],
+                "xp_at_unlock": row[2],
+            }
+            for row in rows
+        ]
+
+    def get_unlocked_achievements(self):
+        """Return all unlocked achievements with timestamps."""
+        self.cursor.execute("""
+            SELECT achievement_id, unlocked_at, trigger_event
+            FROM user_achievements
+            ORDER BY id ASC
+        """)
+        rows = self.cursor.fetchall()
+        return [
+            {
+                "achievement_id": row[0],
+                "unlocked_at": row[1],
+                "trigger_event": row[2],
+            }
+            for row in rows
+        ]
+
+    def unlock_achievement(self, achievement_id, trigger_event="manual", timestamp=None):
+        """Unlock an achievement idempotently."""
+        if timestamp is None:
+            timestamp = date.today().isoformat()
+        self.cursor.execute("""
+            INSERT OR IGNORE INTO user_achievements (achievement_id, unlocked_at, trigger_event)
+            VALUES (?, ?, ?)
+        """, (achievement_id, timestamp, trigger_event))
+        self.connection.commit()
+        return self.cursor.rowcount == 1
+
+    def get_progression_setting(self, key, default=None):
+        """Read a setting from user_progression_profile table."""
+        self.cursor.execute("""
+            SELECT value FROM user_progression_profile WHERE key = ?
+        """, (key,))
+        row = self.cursor.fetchone()
+        return row[0] if row is not None else default
+
+    def set_progression_setting(self, key, value):
+        """Store a setting in user_progression_profile table."""
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO user_progression_profile (key, value)
+            VALUES (?, ?)
+        """, (key, str(value)))
+        self.connection.commit()
+
+    def get_milestone_history(self):
+        """Return milestone tier history."""
+        self.cursor.execute("""
+            SELECT milestone_id, tier, reached_at
+            FROM milestone_history
+            ORDER BY milestone_id, tier ASC
+        """)
+        rows = self.cursor.fetchall()
+        return [
+            {
+                "milestone_id": row[0],
+                "tier": row[1],
+                "reached_at": row[2],
+            }
+            for row in rows
+        ]
+
+    def record_milestone_reach(self, milestone_id, tier, timestamp=None):
+        """Record a milestone tier reach idempotently."""
+        if timestamp is None:
+            timestamp = date.today().isoformat()
+        self.cursor.execute("""
+            INSERT OR IGNORE INTO milestone_history (milestone_id, tier, reached_at)
+            VALUES (?, ?, ?)
+        """, (milestone_id, tier, timestamp))
+        self.connection.commit()
+        return self.cursor.rowcount == 1
+
+    def sync_and_reconcile_xp_ledger(self):
+        """Perform startup reconciliation of XP ledger, daily goal rewards, and level history."""
+        total_xp = self.sync_total_xp_cache()
+        
+        # Retroactively evaluate daily goal XP for past daily_history rows
+        self.cursor.execute("""
+            SELECT date FROM daily_history WHERE goal_completed = 1
+        """)
+        goal_rows = self.cursor.fetchall()
+        for row in goal_rows:
+            self.award_daily_goal_xp(earned_date=row[0], amount=50)
+
+        total_xp = self.sync_total_xp_cache()
+        self.check_and_record_level_reaches(total_xp, timestamp="retroactive_migration")
         return total_xp
 
     def get_total_xp_setting(self):
-        # Read the saved XP total without creating or resetting a setting.
-        value = self.get_setting("total_xp")
+        # Read the saved XP total (always synchronized with the authoritative xp_events ledger).
+        return self.get_total_xp_from_events()
 
-        if value is None:
-            return 0
-
-        return int(value)
 
     def record_focus_session(
         self,

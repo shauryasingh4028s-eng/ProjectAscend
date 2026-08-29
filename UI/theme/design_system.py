@@ -599,6 +599,39 @@ class ThemeManager:
                 font-weight: 800;
             }}
 
+            QLabel#CharacterNameHeading {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 26px;
+                font-weight: 800;
+                letter-spacing: 0.5px;
+            }}
+
+            QLabel#PlayerLevelHeading {{
+                color: {Colors.ACCENT};
+                font-size: 30px;
+                font-weight: 800;
+                letter-spacing: 0.5px;
+            }}
+
+            QFrame#CharacterPortraitFrame {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER_STRONG};
+                border-radius: {Radius.LG}px;
+            }}
+
+            QProgressBar#XpBar,
+            QProgressBar#XpBarHero {{
+                background-color: {Colors.SURFACE_ELEVATED};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 7px;
+            }}
+
+            QProgressBar#XpBar::chunk,
+            QProgressBar#XpBarHero::chunk {{
+                background-color: {Colors.ACCENT};
+                border-radius: 6px;
+            }}
+
             QLabel#PlayerXp,
             QLabel#InsightMetricNote,
             QLabel#HeatmapDayLabel {{

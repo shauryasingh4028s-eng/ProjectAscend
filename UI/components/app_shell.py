@@ -87,6 +87,12 @@ class SidebarPlayerCard(QFrame):
         initials = "".join(part[0] for part in clean_name.split()[:2]).upper() or "A"
         self.avatar_label.setText(initials[:2])
 
+    def set_avatar_pixmap(self, pixmap):
+        """Set pixmap avatar for selected character sprite."""
+        if pixmap is not None and not pixmap.isNull():
+            self.avatar_label.setText("")
+            self.avatar_label.setPixmap(pixmap)
+
     def set_progress(self, level, xp_into_level, xp_for_level, total_xp):
         """Display already-calculated progression values."""
         self.level_label.setText(f"Level {level}")
