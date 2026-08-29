@@ -4,9 +4,12 @@ Comprehensive progression identity, macro milestone tracking, and achievement li
 Consumes authoritative ProgressionService, CharacterManager, and AchievementManager.
 """
 
-from PySide6.QtCore import QSize, Qt, Signal
+import math
+
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, Signal, QVariantAnimation
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -26,8 +29,90 @@ from Modules.character_manager import CharacterManager, get_evolution_stage
 from Modules.insights_service import format_day_count
 from Modules.progression_service import ProgressionService
 from UI.theme.design_system import Colors, Radius, Spacing, Typography
+from UI.theme.motion_utils import is_reduced_motion_enabled
 
 XP_PER_LEVEL = 100
+
+
+class StageEvolutionIndicatorWidget(QFrame):
+    """Compact 4-stage evolution journey indicator."""
+
+    STAGE_TITLES = {
+        1: "Initiated",
+        2: "Established",
+        3: "Ascended",
+        4: "Sovereign",
+    }
+
+    def __init__(self, current_stage=1):
+        super().__init__()
+        self.setObjectName("EvolutionIndicator")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._current_stage = max(1, min(int(current_stage), 4))
+        self.main_layout = QHBoxLayout(self)
+        self.main_layout.setContentsMargins(0, Spacing.XS, 0, Spacing.XS)
+        self.main_layout.setSpacing(Spacing.SM)
+
+        self.node_widgets = {}
+        self.build_ui()
+
+    def build_ui(self):
+        for stage_idx in range(1, 5):
+            node_layout = QHBoxLayout()
+            node_layout.setSpacing(Spacing.XS)
+
+            dot = QLabel()
+            dot.setFixedSize(14, 14)
+            dot.setAlignment(Qt.AlignCenter)
+
+            label = QLabel(f"S{stage_idx} {self.STAGE_TITLES[stage_idx]}")
+
+            node_layout.addWidget(dot)
+            node_layout.addWidget(label)
+            self.main_layout.addLayout(node_layout)
+
+            line = None
+            if stage_idx < 4:
+                line = QLabel("───")
+                self.main_layout.addWidget(line)
+
+            self.node_widgets[stage_idx] = {
+                "dot": dot,
+                "label": label,
+                "line": line,
+            }
+
+        self.main_layout.addStretch()
+        self.update_stage_styles()
+
+    def update_stage_styles(self):
+        for stage_idx in range(1, 5):
+            node = self.node_widgets[stage_idx]
+            dot = node["dot"]
+            label = node["label"]
+            line = node["line"]
+
+            if stage_idx < self._current_stage:
+                dot.setText("●")
+                dot.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 11px; font-weight: bold;")
+                label.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 12px; font-weight: 600;")
+            elif stage_idx == self._current_stage:
+                dot.setText("◉")
+                dot.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 13px; font-weight: bold;")
+                label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px; font-weight: 750;")
+            else:
+                dot.setText("○")
+                dot.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px;")
+                label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 12px; font-weight: 500;")
+
+            if line is not None:
+                line.setStyleSheet(f"color: {Colors.BORDER_STRONG if stage_idx < self._current_stage else Colors.BORDER}; font-size: 10px;")
+
+    def set_stage(self, current_stage):
+        new_stage = max(1, min(int(current_stage), 4))
+        if new_stage != self._current_stage:
+            self._current_stage = new_stage
+            self.update_stage_styles()
 
 
 class MilestoneCardWidget(QFrame):
@@ -85,6 +170,18 @@ class MilestoneCardWidget(QFrame):
 
         self.update_data(current_val, milestone_id)
 
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        if not is_reduced_motion_enabled():
+            self.setProperty("hovered", "true")
+            self.setStyle(self.style())
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        if not is_reduced_motion_enabled():
+            self.setProperty("hovered", "false")
+            self.setStyle(self.style())
+
     def update_data(self, current_val, milestone_id):
         cat_info = MILESTONE_CATALOG.get(milestone_id)
         if not cat_info:
@@ -139,6 +236,10 @@ class MilestoneCardWidget(QFrame):
 class PlayerProgressPage(QWidget):
     """Complete progression dashboard experience."""
 
+    NEUTRAL_Y = 8
+    IDLE_DURATION_MS = 3500
+    TRANSITION_DURATION_MS = 300
+
     def __init__(self, xp_manager, streak_manager, progression_service=None, character_manager=None):
         super().__init__()
         self.xp_manager = xp_manager
@@ -160,6 +261,22 @@ class PlayerProgressPage(QWidget):
             self.progression_service = progression_service
 
         self.asset_mgr = CharacterAssetManager()
+
+        # Motion & Presentation Lifecycle Controllers
+        self._idle_anim = None
+        self._switch_anim = None
+        self._xp_anim = None
+        self._opacity_effect = None
+        self._current_displayed_char_id = None
+        self._current_displayed_stage = None
+        self._pixmap_swapped = False
+
+        # Phase 5B Progression Feedback State Tracking
+        self._last_xp_into = None
+        self._last_xp_for = None
+        self._last_level = None
+        self._last_stage = None
+        self._known_unlocked_ids = None
 
         self.build_ui()
         self.refresh()
@@ -220,14 +337,11 @@ class PlayerProgressPage(QWidget):
         portrait_frame = QFrame()
         portrait_frame.setObjectName("CharacterPortraitFrame")
         portrait_frame.setFixedSize(216, 216)
-        portrait_layout = QVBoxLayout(portrait_frame)
-        portrait_layout.setContentsMargins(8, 8, 8, 8)
-        portrait_layout.setAlignment(Qt.AlignCenter)
 
-        self.avatar_label = QLabel()
+        self.avatar_label = QLabel(portrait_frame)
         self.avatar_label.setFixedSize(200, 200)
         self.avatar_label.setAlignment(Qt.AlignCenter)
-        portrait_layout.addWidget(self.avatar_label)
+        self.avatar_label.move(8, self.NEUTRAL_Y)
 
         layout.addWidget(portrait_frame, alignment=Qt.AlignTop | Qt.AlignLeft)
 
@@ -263,17 +377,22 @@ class PlayerProgressPage(QWidget):
         self.char_identity_label.setStyleSheet("font-size: 13px; font-weight: 600;")
         detail_layout.addWidget(self.char_identity_label)
 
-        # Row 3: Prominent Level & Total XP Callout
+        # Row 3: Compact 4-Stage Evolution Journey Indicator
+        self.evolution_indicator = StageEvolutionIndicatorWidget(current_stage=1)
+        detail_layout.addWidget(self.evolution_indicator)
+
+        # Row 4: Prominent Level & Total XP Callout
         level_xp_row = QHBoxLayout()
         level_xp_row.setSpacing(Spacing.LG)
         level_xp_row.setAlignment(Qt.AlignBottom)
 
         self.level_title = QLabel("Level 1")
         self.level_title.setObjectName("PlayerLevelHeading")
+        self.level_title.setStyleSheet("font-size: 30px; font-weight: 850;")
 
         self.total_xp_label = QLabel("0 XP earned in total")
         self.total_xp_label.setObjectName("MutedText")
-        self.total_xp_label.setStyleSheet("font-size: 12px; font-weight: 500;")
+        self.total_xp_label.setStyleSheet("font-size: 13px; font-weight: 500;")
 
         level_xp_row.addWidget(self.level_title)
         level_xp_row.addWidget(self.total_xp_label)
@@ -366,8 +485,184 @@ class PlayerProgressPage(QWidget):
 
         return section
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh()
+        if not is_reduced_motion_enabled():
+            self.start_idle_animation()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.stop_idle_animation()
+        if self._switch_anim is not None and self._switch_anim.state() == QVariantAnimation.Running:
+            self._switch_anim.stop()
+
+    def start_idle_animation(self):
+        """Start gentle vertical idle breathing animation if allowed."""
+        if is_reduced_motion_enabled():
+            self.stop_idle_animation()
+            return
+
+        if not self.isVisible():
+            return
+
+        if self._idle_anim is not None and self._idle_anim.state() == QVariantAnimation.Running:
+            return
+
+        if self._idle_anim is None:
+            self._idle_anim = QVariantAnimation(self)
+            self._idle_anim.setStartValue(0.0)
+            self._idle_anim.setEndValue(1.0)
+            self._idle_anim.setDuration(self.IDLE_DURATION_MS)
+            self._idle_anim.setLoopCount(-1)
+            self._idle_anim.valueChanged.connect(self._on_idle_anim_frame)
+
+        self._idle_anim.start()
+
+    def stop_idle_animation(self):
+        """Stop idle animation safely and restore neutral portrait position."""
+        if self._idle_anim is not None:
+            self._idle_anim.stop()
+        if hasattr(self, "avatar_label") and self.avatar_label is not None:
+            self.avatar_label.move(8, self.NEUTRAL_Y)
+
+    def _on_idle_anim_frame(self, progress):
+        """Continuous sinusoidal y-displacement calculation: ±3px travel over 3500ms cycle."""
+        if is_reduced_motion_enabled() or not self.isVisible():
+            self.stop_idle_animation()
+            return
+        progress_float = float(progress)
+        y_offset = int(round(-3.0 * math.sin(2.0 * math.pi * progress_float)))
+        self.avatar_label.move(8, self.NEUTRAL_Y + y_offset)
+
+    def _trigger_character_switch_transition(self, target_char_id, target_stage):
+        """Perform smooth ~300ms fade out -> swap sprite -> fade in transition."""
+        if is_reduced_motion_enabled():
+            pixmap = self.asset_mgr.get_character_pixmap(target_char_id, stage=target_stage, width=200, height=200)
+            self.avatar_label.setPixmap(pixmap)
+            self.avatar_label.move(8, self.NEUTRAL_Y)
+            self._current_displayed_char_id = target_char_id
+            self._current_displayed_stage = target_stage
+            return
+
+        self.stop_idle_animation()
+
+        if self._switch_anim is not None and self._switch_anim.state() == QVariantAnimation.Running:
+            self._switch_anim.stop()
+
+        if self._opacity_effect is None or self.avatar_label.graphicsEffect() != self._opacity_effect:
+            self._opacity_effect = QGraphicsOpacityEffect(self.avatar_label)
+            self.avatar_label.setGraphicsEffect(self._opacity_effect)
+
+        self._pixmap_swapped = False
+        self._current_displayed_char_id = target_char_id
+        self._current_displayed_stage = target_stage
+
+        def on_switch_frame(val):
+            v = float(val)
+            if v <= 0.5:
+                # 0-150ms: opacity 1.0 -> 0.0
+                opacity = max(0.0, 1.0 - (v / 0.5))
+                self._opacity_effect.setOpacity(opacity)
+            else:
+                # Midpoint swap: update sprite to authoritative character selection
+                if not self._pixmap_swapped:
+                    curr_summary = self.progression_service.get_progression_summary()
+                    curr_char = curr_summary["character"]
+                    curr_stage = curr_summary["evolution_info"]["stage"]
+                    pixmap = self.asset_mgr.get_character_pixmap(curr_char["id"], stage=curr_stage, width=200, height=200)
+                    self.avatar_label.setPixmap(pixmap)
+                    self._current_displayed_char_id = curr_char["id"]
+                    self._current_displayed_stage = curr_stage
+                    self._pixmap_swapped = True
+
+                # 150-300ms: opacity 0.0 -> 1.0
+                opacity = min(1.0, (v - 0.5) / 0.5)
+                self._opacity_effect.setOpacity(opacity)
+
+        def on_switch_finished():
+            # Final authoritative check & cleanup
+            curr_summary = self.progression_service.get_progression_summary()
+            curr_char = curr_summary["character"]
+            curr_stage = curr_summary["evolution_info"]["stage"]
+            pixmap = self.asset_mgr.get_character_pixmap(curr_char["id"], stage=curr_stage, width=200, height=200)
+            self.avatar_label.setPixmap(pixmap)
+            self._current_displayed_char_id = curr_char["id"]
+            self._current_displayed_stage = curr_stage
+
+            self._opacity_effect.setOpacity(1.0)
+            if self.isVisible() and not is_reduced_motion_enabled():
+                self.start_idle_animation()
+
+        self._switch_anim = QVariantAnimation(self)
+        self._switch_anim.setStartValue(0.0)
+        self._switch_anim.setEndValue(1.0)
+        self._switch_anim.setDuration(self.TRANSITION_DURATION_MS)
+        self._switch_anim.valueChanged.connect(on_switch_frame)
+        self._switch_anim.finished.connect(on_switch_finished)
+        self._switch_anim.start()
+
+    def _animate_xp_progress(self, old_xp_into, target_xp_into, old_level, new_level, xp_for):
+        """Smoothly animate level_bar progress towards authoritative xp_into value (~400ms, OutCubic)."""
+        if is_reduced_motion_enabled():
+            self.level_bar.setRange(0, xp_for)
+            self.level_bar.setValue(target_xp_into)
+            return
+
+        if self._xp_anim is not None and self._xp_anim.state() == QPropertyAnimation.Running:
+            self._xp_anim.stop()
+
+        self.level_bar.setRange(0, xp_for)
+        start_val = self.level_bar.value()
+
+        if new_level > old_level:
+            self._xp_anim = QPropertyAnimation(self.level_bar, b"value", self)
+            self._xp_anim.setDuration(220)
+            self._xp_anim.setStartValue(start_val)
+            self._xp_anim.setEndValue(xp_for)
+            self._xp_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+            def on_first_phase_done():
+                self.level_bar.setValue(0)
+                self._xp_anim = QPropertyAnimation(self.level_bar, b"value", self)
+                self._xp_anim.setDuration(220)
+                self._xp_anim.setStartValue(0)
+                self._xp_anim.setEndValue(target_xp_into)
+                self._xp_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+                def on_second_phase_done():
+                    self.level_bar.setValue(target_xp_into)
+
+                self._xp_anim.finished.connect(on_second_phase_done)
+                self._xp_anim.start()
+
+            self._xp_anim.finished.connect(on_first_phase_done)
+            self._xp_anim.start()
+        else:
+            self._xp_anim = QPropertyAnimation(self.level_bar, b"value", self)
+            self._xp_anim.setDuration(400)
+            self._xp_anim.setStartValue(start_val)
+            self._xp_anim.setEndValue(target_xp_into)
+            self._xp_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+            def on_xp_anim_done():
+                self.level_bar.setValue(target_xp_into)
+
+            self._xp_anim.finished.connect(on_xp_anim_done)
+            self._xp_anim.start()
+
+    def _handle_level_up_feedback(self, new_level):
+        """Provide a restrained presentation moment for genuine level increases."""
+        from UI.components.toast_notification import ToastNotification
+        ToastNotification.show_toast(
+            self,
+            f"LEVEL {new_level} UNLOCKED!",
+            f"Outstanding focus! You reached Level {new_level}.",
+            icon_str="🚀",
+        )
+
     def refresh(self):
-        """Re-read authoritative progression services and refresh all UI sections."""
+        """Re-read authoritative progression services and refresh all UI sections with presentation feedback."""
         summary = self.progression_service.get_progression_summary()
 
         total_xp = summary["total_xp"]
@@ -378,22 +673,28 @@ class PlayerProgressPage(QWidget):
         evolution = summary["evolution_info"]
         char = summary["character"]
 
-        # Update Hero Card
+        target_char_id = char["id"]
+        target_stage = evolution["stage"]
+
+        curr_unlocked_ids = set(self.progression_service.achievement_manager.get_unlocked_ids())
+
+        # Determine deltas if previous state exists
+        is_initial_load = self._last_level is None
+        stage_evolved = not is_initial_load and (target_stage > self._last_stage)
+        level_up = not is_initial_load and (level > self._last_level)
+        xp_changed = not is_initial_load and (xp_into != self._last_xp_into or level != self._last_level)
+        newly_unlocked_ids = set() if is_initial_load or self._known_unlocked_ids is None else (curr_unlocked_ids - self._known_unlocked_ids)
+
+        # Update Hero Card Text
         self.char_name_label.setText(char["name"])
         self.char_identity_label.setText(char["title"])
         self.stage_badge.setText(f"Stage {evolution['stage']} — {evolution['name']}")
+        self.evolution_indicator.set_stage(target_stage)
         self.level_title.setText(f"Level {level}")
         self.total_xp_label.setText(f"{total_xp:,} XP earned in total")
-
-        self.level_bar.setRange(0, xp_for)
-        self.level_bar.setValue(xp_into)
         self.next_level_label.setText(
             f"{xp_into} / {xp_for} XP  •  {xp_rem} XP to Level {level + 1}"
         )
-
-        # Render Character Avatar Portrait via Asset Manager at 200x200 scale
-        pixmap = self.asset_mgr.get_character_pixmap(char["id"], stage=evolution["stage"], width=200, height=200)
-        self.avatar_label.setPixmap(pixmap)
 
         # Update Macro Milestones
         focus_mins = self.database.get_total_focus_minutes()
@@ -406,11 +707,69 @@ class PlayerProgressPage(QWidget):
         self.milestone_cards["daily_goal_days"].update_data(goal_days, "daily_goal_days")
         self.milestone_cards["longest_streak"].update_data(longest_streak, "longest_streak")
 
-        # Update Recent Achievements
-        self.refresh_recent_achievements()
+        # Update Recent Achievements (with smooth fade-in for newly unlocked items)
+        self.refresh_recent_achievements(newly_unlocked_ids=newly_unlocked_ids)
 
-    def refresh_recent_achievements(self):
-        """Render recent unlocked achievements or empty state callout."""
+        # Handle Character Avatar Portrait Motion & Switch Transition
+        if is_reduced_motion_enabled():
+            self.stop_idle_animation()
+            if self._switch_anim is not None and self._switch_anim.state() == QVariantAnimation.Running:
+                self._switch_anim.stop()
+            if self._xp_anim is not None and self._xp_anim.state() == QPropertyAnimation.Running:
+                self._xp_anim.stop()
+            if self._opacity_effect is not None:
+                self._opacity_effect.setOpacity(1.0)
+
+            self.level_bar.setRange(0, xp_for)
+            self.level_bar.setValue(xp_into)
+
+            pixmap = self.asset_mgr.get_character_pixmap(target_char_id, stage=target_stage, width=200, height=200)
+            self.avatar_label.setPixmap(pixmap)
+            self.avatar_label.move(8, self.NEUTRAL_Y)
+            self._current_displayed_char_id = target_char_id
+            self._current_displayed_stage = target_stage
+        else:
+            if is_initial_load:
+                self.level_bar.setRange(0, xp_for)
+                self.level_bar.setValue(xp_into)
+
+                pixmap = self.asset_mgr.get_character_pixmap(target_char_id, stage=target_stage, width=200, height=200)
+                self.avatar_label.setPixmap(pixmap)
+                self.avatar_label.move(8, self.NEUTRAL_Y)
+                self._current_displayed_char_id = target_char_id
+                self._current_displayed_stage = target_stage
+                if self.isVisible():
+                    self.start_idle_animation()
+            else:
+                # Coordinate events according to priority hierarchy:
+                # 1. Evolution Stage  2. Level Up  3. Achievement Unlock  4. XP Progress
+                if stage_evolved or self._current_displayed_char_id != target_char_id or self._current_displayed_stage != target_stage:
+                    self._trigger_character_switch_transition(target_char_id, target_stage)
+
+                if level_up:
+                    self._handle_level_up_feedback(level)
+
+                if xp_changed:
+                    self._animate_xp_progress(self._last_xp_into or 0, xp_into, self._last_level or level, level, xp_for)
+                else:
+                    self.level_bar.setRange(0, xp_for)
+                    self.level_bar.setValue(xp_into)
+
+                if self.isVisible() and (self._idle_anim is None or self._idle_anim.state() != QVariantAnimation.Running):
+                    self.start_idle_animation()
+
+        # Update tracked state to current authoritative values
+        self._last_xp_into = xp_into
+        self._last_xp_for = xp_for
+        self._last_level = level
+        self._last_stage = target_stage
+        self._known_unlocked_ids = curr_unlocked_ids
+
+    def refresh_recent_achievements(self, newly_unlocked_ids=None):
+        """Render recent unlocked achievements with presentation feedback for new unlocks."""
+        if newly_unlocked_ids is None:
+            newly_unlocked_ids = set()
+
         # Clear existing widgets
         while self.achievements_container.count():
             item = self.achievements_container.takeAt(0)
@@ -473,6 +832,27 @@ class PlayerProgressPage(QWidget):
             cl.addWidget(date_lbl)
 
             self.achievements_container.addWidget(card)
+
+            # Newly unlocked achievement presentation feedback
+            if aid in newly_unlocked_ids:
+                if not is_reduced_motion_enabled():
+                    effect = QGraphicsOpacityEffect(card)
+                    card.setGraphicsEffect(effect)
+                    anim = QPropertyAnimation(effect, b"opacity", card)
+                    anim.setDuration(350)
+                    anim.setStartValue(0.0)
+                    anim.setEndValue(1.0)
+                    anim.setEasingCurve(QEasingCurve.OutCubic)
+                    card._fade_anim = anim
+                    anim.start()
+
+                from UI.components.toast_notification import ToastNotification
+                ToastNotification.show_toast(
+                    self,
+                    "ACHIEVEMENT UNLOCKED!",
+                    f"{ach_info['icon']} {ach_info['name']}: {ach_info['description']}",
+                    icon_str=ach_info["icon"],
+                )
 
     def open_character_selector(self):
         """Open the non-destructive Character Selector dialog."""

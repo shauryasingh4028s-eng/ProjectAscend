@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from Modules.achievement_manager import ACHIEVEMENT_DEFINITIONS
 from UI.theme.design_system import Colors, Radius, Spacing, Typography
+from UI.theme.motion_utils import is_reduced_motion_enabled
 
 
 class AchievementCardWidget(QFrame):
@@ -25,13 +26,15 @@ class AchievementCardWidget(QFrame):
     def __init__(self, achievement_info, unlock_record=None):
         super().__init__()
         self.achievement_id = achievement_info["id"]
-        is_unlocked = unlock_record is not None
+        self.is_unlocked = unlock_record is not None
 
         self.setObjectName("InsightItem")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        if is_unlocked:
+        if self.is_unlocked:
             self.setProperty("selected", "true")
+        else:
+            self.setProperty("locked", "true")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(Spacing.LG, Spacing.MD + 2, Spacing.LG, Spacing.MD + 2)
@@ -39,10 +42,10 @@ class AchievementCardWidget(QFrame):
 
         # Icon badge
         icon_label = QLabel(achievement_info["icon"])
-        icon_label.setObjectName("Badge" if not is_unlocked else "LevelBadge")
+        icon_label.setObjectName("Badge" if not self.is_unlocked else "LevelBadge")
         icon_label.setFixedSize(52, 52)
         icon_label.setAlignment(Qt.AlignCenter)
-        if is_unlocked:
+        if self.is_unlocked:
             icon_label.setStyleSheet("font-size: 24px;")
         else:
             icon_label.setStyleSheet(f"background-color: {Colors.SURFACE_ELEVATED}; color: {Colors.TEXT_MUTED}; border-radius: 14px; font-size: 22px;")
@@ -54,8 +57,8 @@ class AchievementCardWidget(QFrame):
         header_row.setSpacing(Spacing.SM)
 
         name_label = QLabel(achievement_info["name"])
-        name_label.setObjectName("Greeting" if is_unlocked else "SectionTitle")
-        name_label.setStyleSheet("font-size: 15px; font-weight: 750;" if is_unlocked else f"font-size: 15px; font-weight: 700; color: {Colors.TEXT_MUTED};")
+        name_label.setObjectName("Greeting" if self.is_unlocked else "SectionTitle")
+        name_label.setStyleSheet("font-size: 15px; font-weight: 750;" if self.is_unlocked else f"font-size: 15px; font-weight: 700; color: {Colors.TEXT_MUTED};")
 
         cat_badge = QLabel(achievement_info["category"])
         cat_badge.setObjectName("Badge")
@@ -71,7 +74,7 @@ class AchievementCardWidget(QFrame):
         text_layout.addLayout(header_row)
         text_layout.addWidget(desc_label)
 
-        if is_unlocked:
+        if self.is_unlocked:
             unlocked_at_str = unlock_record.get("unlocked_at", "") if isinstance(unlock_record, dict) else (unlock_record[1] if isinstance(unlock_record, (list, tuple)) and len(unlock_record) > 1 else "")
             date_display = unlocked_at_str.split("T")[0] if "T" in unlocked_at_str else unlocked_at_str
             date_label = QLabel(f"Unlocked: {date_display}" if date_display else "Unlocked")
@@ -84,6 +87,18 @@ class AchievementCardWidget(QFrame):
 
         layout.addWidget(icon_label)
         layout.addLayout(text_layout, 1)
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        if not is_reduced_motion_enabled():
+            self.setProperty("hovered", "true")
+            self.setStyle(self.style())
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        if not is_reduced_motion_enabled():
+            self.setProperty("hovered", "false")
+            self.setStyle(self.style())
 
 
 class AchievementLibraryDialog(QDialog):
