@@ -990,6 +990,93 @@ class ThemeManager:
                 border: 1px solid {Colors.PRIMARY};
             }}
 
+            /* ---------- Settings Tab Styling ---------- */
+
+            QFrame#SettingsSectionCard {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.LG}px;
+            }}
+
+            QFrame#SettingsRow {{
+                background-color: transparent;
+                border: none;
+                border-bottom: 1px solid {Colors.BORDER};
+                border-radius: 0px;
+            }}
+
+            QFrame#SettingsRow:hover {{
+                background-color: {Colors.SURFACE_HOVER};
+            }}
+
+            QLabel#SettingsSectionHeader {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 15px;
+                font-weight: 750;
+                letter-spacing: 0.5px;
+            }}
+
+            QLabel#SettingsSectionSubheader {{
+                color: {Colors.TEXT_MUTED};
+                font-size: {Typography.SECONDARY}px;
+            }}
+
+            QLabel#SettingTitle {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 15px;
+                font-weight: 650;
+            }}
+
+            QLabel#SettingsRowIcon {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.MD}px;
+            }}
+
+            QLabel#StoragePathBadge {{
+                background-color: {Colors.SURFACE_SECONDARY};
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {Radius.SM}px;
+                padding: 6px 12px;
+                font-family: Consolas, "Courier New", monospace;
+                font-size: 12px;
+            }}
+
+            QCheckBox {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: {Typography.BODY}px;
+                spacing: 8px;
+            }}
+
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border: 1px solid {Colors.BORDER_STRONG};
+                border-radius: 4px;
+                background-color: {Colors.SURFACE_SECONDARY};
+            }}
+
+            QCheckBox::indicator:hover {{
+                border: 1px solid {Colors.PRIMARY};
+            }}
+
+            QCheckBox::indicator:checked {{
+                background-color: {Colors.PRIMARY};
+                border: 1px solid {Colors.PRIMARY};
+            }}
+
+            QComboBox QAbstractItemView {{
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_STRONG};
+                selection-background-color: {Colors.PRIMARY_SOFT};
+                selection-color: {Colors.TEXT_PRIMARY};
+                outline: none;
+                padding: 4px;
+            }}
+
+
             /* ---------- History entries ---------- */
 
             QFrame#HistoryEntry {{
