@@ -8,4 +8,4 @@ Note: packaging metadata (ProjectAscendInstaller.iss) has its own copy that
 is stamped at release time and is intentionally not read at runtime.
 """
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
