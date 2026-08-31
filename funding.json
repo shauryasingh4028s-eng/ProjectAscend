@@ -1,0 +1,61 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "version": "v1.1.0",
+  "entity": {
+    "type": "individual",
+    "role": "maintainer",
+    "name": "Shaurya Singh",
+    "email": "ascendworklab@gmail.com",
+    "description": "Student developer building Project Ascend, a local-first productivity desktop application.",
+    "webpageUrl": {
+      "url": "https://projectascend-website.pages.dev/"
+    }
+  },
+  "projects": [
+    {
+      "guid": "project-ascend",
+      "name": "Project Ascend",
+      "description": "A local-first productivity desktop application designed to help you plan realistically, focus deeply, and understand how you actually work.",
+      "webpageUrl": {
+        "url": "https://projectascend-website.pages.dev/"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/shauryasingh4028s-eng/ProjectAscend"
+      },
+      "licenses": [
+        "spdx:Apache-2.0"
+      ],
+      "tags": [
+        "productivity",
+        "desktop",
+        "python",
+        "pyside",
+        "local-first"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "foss-united-payout",
+        "type": "bank",
+        "address": "Direct Bank Transfer for FOSS United Grant Payout",
+        "description": "Grant funds will be transferred directly to the maintainer's bank account upon grant approval."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "foss-united-grant-v1-5",
+        "status": "active",
+        "name": "FOSS United Project Grant — Project Ascend 18-Month Development",
+        "description": "Support continuous 18-month development of Project Ascend v1.5.0+, including part-time developer assistance, testing automation, UI/UX polish, and installer code-signing.",
+        "amount": 500000,
+        "currency": "INR",
+        "frequency": "one-time",
+        "channels": [
+          "foss-united-payout"
+        ]
+      }
+    ]
+  }
+}
